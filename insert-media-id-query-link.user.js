@@ -1,71 +1,57 @@
 // ==UserScript==
-// @name         Insert AV ID link
-// @version      0.4
-// @description  hehe
+// @name         Insert AV/IV query link
+// @version      0.5
+// @description  Insert AV/IV query link
 // @author       mechchorogi
 // @match        https://adult.contents.fc2.com/article/*/
 // @match        https://www.dmm.co.jp/digital/videoa/*
+// @match        http://idolerotic.net/*
+// @match        https://idolerotic.net/*
 // @grant        none
 // ==/UserScript==
 
-let generateQueryURL = (queryString) => {
-    let transformForTktube = (queryString) => {
-        return queryString.replace(/-/g, "--");
-    };
-    return "https://tktube.com/search/" + transformForTktube(queryString) + "/";
-};
+const transformForTktube = queryString => queryString.replace(/-/g, "--");
+
+const generateAVQueryURL = queryString => `https://tktube.com/search/${transformForTktube(queryString)}/`;
+const generateIVQueryURL = queryString => `https://watchjavidol.com/?s=${queryString}`;
+
 
 (function() {
     'use strict';
-    let extractContentsId;
-    let embedContentsLink;
-    switch (document.location.host) {
-        case "adult.contents.fc2.com":
-            extractContentsId = () => {
-                return "FC2-PPV-" + document.location.toString().split('/').slice(-2)[0];
-            }
-            embedContentsLink = (contentsId) => {
-                let queryURL = generateQueryURL(contentsId);
-                let appendTarget = document.querySelector('div.items_article_headerInfo > ul');
-                let listNode = document.createElement('li');
-                let linkNode = document.createElement('a');
-                linkNode.text = contentsId;
-                linkNode.href = queryURL;
-                linkNode.target = '_blank';
-                linkNode.rel = 'noopener noreferrer';
-                listNode.appendChild(linkNode);
-                appendTarget.appendChild(listNode);
-            };
-            break;
-        case "www.dmm.co.jp":
-            extractContentsId = () => {
-                let cid = document.location.href.split("/").filter(word => word.startsWith("cid="))[0];
-                let match = cid.match(/cid=\d*(\D+)(\d+)/);
-                return match[1] + "-" + match[2].slice(-3);
-            };
-            embedContentsLink = (contentsId) => {
-                let queryURL = generateQueryURL(contentsId);
-                let appendTarget = document.querySelector('div.box-rank ~ table tbody');
-                let trNode = document.createElement('tr');
-                let tdNode1 = document.createElement('td');
-                tdNode1.innerText = "Query：";
-                tdNode1.align = "right";
-                tdNode1.valign = "top";
-                tdNode1.class = "nw";
-                let tdNode2 = document.createElement('td');
-                let linkNode = document.createElement('a');
-                linkNode.text = contentsId;
-                linkNode.href = queryURL;
-                linkNode.target = '_blank';
-                linkNode.rel = 'noopener noreferrer';
-                tdNode2.appendChild(linkNode);
-                trNode.appendChild(tdNode1);
-                trNode.appendChild(tdNode2);
-                appendTarget.appendChild(trNode);
-            };
-            break;
-    }
 
-    let contentsId = extractContentsId();
-    embedContentsLink(contentsId);
+    const embedLink = (linkText, cssSelector, queryUrl) => {
+        const targetElement = document.querySelector(cssSelector);
+        if (!targetElement) return;
+
+        const searchLink = document.createElement('a');
+        searchLink.textContent = `💖 ${linkText}`;
+        searchLink.href = queryUrl;
+        searchLink.target = '_blank';
+        searchLink.rel = 'noopener noreferrer';
+
+        targetElement.appendChild(searchLink);
+    };
+
+    let mediaId = "";
+    let insertSelector = "";
+    let queryUrl = "";
+    switch (document.location.host) {
+    case "adult.contents.fc2.com":
+        const lastSegment = document.location.href.split('/').slice(-2)[0];
+        mediaId = `FC2-PPV-${lastSegment}`;
+        insertSelector = ".items_article_headerInfo h3";
+        queryUrl = generateAVQueryURL(mediaId);
+        break;
+    case "www.dmm.co.jp":
+        mediaId = document.location.href.replace(/.*\/cid=(\D+)(0*)(\d+)\/.*/, "$1-$3");
+        insertSelector = "div.hreview";
+        queryUrl = generateAVQueryURL(mediaId);
+        break;
+    case "idolerotic.net":
+        mediaId = document.querySelector('div.eee p:last-child font:last-child').innerText.split('：').pop();
+        insertSelector = "h1.entry-title";
+        queryUrl = generateIVQueryURL(mediaId);
+        break;
+    }
+    embedLink(mediaId, insertSelector, queryUrl);
 })();
