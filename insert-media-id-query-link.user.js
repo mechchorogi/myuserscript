@@ -10,7 +10,7 @@
 
 let generateQueryURL = (queryString) => {
     let transformForTktube = (queryString) => {
-        return queryString.replace(/([a-zA-Z]+)-(\d+)/, "$1--$2");
+        return queryString.replace(/-/g, "--");
     };
     return "https://tktube.com/search/" + transformForTktube(queryString) + "/";
 };
