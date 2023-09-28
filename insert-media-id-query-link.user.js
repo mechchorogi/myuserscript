@@ -64,13 +64,6 @@ let generateQueryURL = (queryString) => {
                 appendTarget.appendChild(trNode);
             };
             break;
-        case "idolerotic.net":
-            extractContentsId = () => {
-                return document.querySelector('div.eee p:last-child font:last-child').innerText.split(':').pop();
-            };
-            embedContentsLink = (contentsId) => {
-                let
-            };
     }
 
     let contentsId = extractContentsId();
