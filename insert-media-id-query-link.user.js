@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Insert AV ID link
-// @version      0.2
+// @version      0.3
 // @description  hehe
 // @author       mechchorogi
 // @match        https://adult.contents.fc2.com/article/*/
