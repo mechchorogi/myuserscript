@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Insert AV/IV query link
-// @version      0.9
+// @version      0.10
 // @description  Insert AV/IV query link
 // @author       mechchorogi
 // @match        https://adult.contents.fc2.com/article/*/
@@ -10,14 +10,52 @@
 // @grant        none
 // ==/UserScript==
 
-const transformForTktube = queryString => queryString.replace(/-/g, "--");
-
-const generateAVQueryURL = queryString => `https://tktube.com/search/${transformForTktube(queryString)}/`;
-const generateIVQueryURL = queryString => `https://watchjavidol.com/?s=${queryString}`;
-
-
 (function() {
     'use strict';
+
+    const transformForTktube = queryString => queryString.replace(/-/g, "--");
+
+    const generateAVQueryURL = queryString => `https://tktube.com/search/${transformForTktube(queryString)}/`;
+    const generateIVQueryURL = queryString => `https://watchjavidol.com/?s=${queryString}`;
+
+    const handlers = {
+        "adult.contents.fc2.com": () => {
+            const lastSegment = document.location.href.split('/').slice(-2)[0];
+            return {
+                mediaId: `FC2-PPV-${lastSegment}`,
+                insertSelector: ".items_article_headerInfo h3",
+                queryUrlGenerator: generateAVQueryURL
+            };
+        },
+        "www.dmm.co.jp": () => {
+            const mediaId = (function() {
+                const cidMatch = document.location.href.match(/.*\/cid=([^\/?&]+)/);
+                if (!cidMatch) return null;
+
+                const [_, mediaIdPart] = cidMatch;
+                const idMatch = mediaIdPart.match(/(\w+)(\d+)/);
+                if (!idMatch) return null;
+
+                const [_, alphaPart, digits] = idMatch;
+                const numberPart = String(digits).padStart(3, '0');
+                return `${alphaPart}-${numberPart}`
+            })();
+            if (!mediaId) return null;
+            return {
+                mediaId,
+                insertSelector: "div.hreview",
+                queryUrlGenerator: generateAVQueryURL
+            };
+        },
+        "idolerotic.net": () => {
+            const mediaId = document.querySelector('div.eee p:last-child font:last-child')?.innerText.split('：').pop();
+            return {
+                mediaId,
+                insertSelector: "h1.entry-title",
+                queryUrlGenerator: generateIVQueryURL
+            };
+        }
+    };
 
     const embedLink = (linkText, cssSelector, queryUrl) => {
         const targetElement = document.querySelector(cssSelector);
@@ -28,40 +66,17 @@ const generateIVQueryURL = queryString => `https://watchjavidol.com/?s=${querySt
         searchLink.href = queryUrl;
         searchLink.target = '_blank';
         searchLink.rel = 'noopener noreferrer';
-
         targetElement.appendChild(searchLink);
     };
 
-    let mediaId, insertSelector, queryUrl;
-    switch (document.location.host) {
-    case "adult.contents.fc2.com":
-        const lastSegment = document.location.href.split('/').slice(-2)[0];
-        if (!lastSegment) { break; }
-        mediaId = `FC2-PPV-${lastSegment}`;
-        insertSelector = ".items_article_headerInfo h3";
-        queryUrl = generateAVQueryURL(mediaId);
-        break;
-    case "www.dmm.co.jp":
-        mediaId = (function() {
-            const cidMatch = document.location.href.match(/.*\/cid=([^\/?&]+)/);
-            if (!cidMatch) return null;
+    const hostHandler = handlers[document.location.host];
 
-            const [_, mediaIdPart] = cidMatch;
-            const idMatch = mediaIdPart.match(/(\w+)(\d+)/);
-            if (!idMatch) return null;
-
-            const [_, alphaPart, digits] = idMatch;
-            const numberPart = String(digits).padStart(3, '0');
-            return `${alphaPart}-${numberPart}`
-        })();
-        insertSelector = "div.hreview";
-        queryUrl = generateAVQueryURL(mediaId);
-        break;
-    case "idolerotic.net":
-        mediaId = document.querySelector('div.eee p:last-child font:last-child')?.innerText.split('：').pop();
-        insertSelector = "h1.entry-title";
-        queryUrl = generateIVQueryURL(mediaId);
-        break;
+    if (hostHandler) {
+        const handlerResult = hostHandler();
+        if (!handlerResult) return;
+        const { mediaId, insertSelector, queryUrlGenerator } = handlerResult;
+        if (!mediaId) return;
+        const queryUrl = queryUrlGenerator(mediaId);
+        embedLink(mediaId, insertSelector, queryUrl);
     }
-    if (mediaId) embedLink(mediaId, insertSelector, queryUrl);
 })();
