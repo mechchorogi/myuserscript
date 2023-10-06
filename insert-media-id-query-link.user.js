@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Insert AV/IV query link
-// @version      0.10
+// @version      0.11
 // @description  Insert AV/IV query link
 // @author       mechchorogi
 // @match        https://adult.contents.fc2.com/article/*/
@@ -32,11 +32,11 @@
                 const cidMatch = document.location.href.match(/.*\/cid=([^\/?&]+)/);
                 if (!cidMatch) return null;
 
-                const [_, mediaIdPart] = cidMatch;
-                const idMatch = mediaIdPart.match(/(\w+)(\d+)/);
+                const [, mediaIdPart] = cidMatch;
+                const idMatch = mediaIdPart.match(/([a-zA-Z]+)(\d+)/);
                 if (!idMatch) return null;
 
-                const [_, alphaPart, digits] = idMatch;
+                const [, alphaPart, digits] = idMatch;
                 const numberPart = String(digits).padStart(3, '0');
                 return `${alphaPart}-${numberPart}`
             })();
