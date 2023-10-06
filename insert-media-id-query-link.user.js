@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Insert AV/IV query link
-// @version      0.7
+// @version      0.8
 // @description  Insert AV/IV query link
 // @author       mechchorogi
 // @match        https://adult.contents.fc2.com/article/*/
@@ -41,16 +41,18 @@ const generateIVQueryURL = queryString => `https://watchjavidol.com/?s=${querySt
         queryUrl = generateAVQueryURL(mediaId);
         break;
     case "www.dmm.co.jp":
-        let preMediaId = document.location.href.replace(/.*\/cid=[h\d_]*(\D+)(\d+)\/.*/, "$1-$2");
-        mediaId = (() => {
-            const regex = /(\w+)-0*(\d+)/;
-            const match = preMediaId.match(regex);
-            if (!match) { return ""; }
-            const number = parseInt(match[2], 10);
-            const paddedNumber = number.toString().padStart(3, '0');
-            return `${match[1]}-${paddedNumber}`;
+        mediaId = (function() {
+            const cidMatch = document.location.href.match(/.*\/cid=([^\/?&]+)/);
+            if (!cidMatch) return null;
+
+            const [_, mediaIdPart] = cidMatch;
+            const idMatch = mediaIdPart.match(/(\w+)(\d+)/);
+            if (!idMatch) return null;
+
+            const [_, alphaPart, digits] = idMatch;
+            const numberPart = String(digits).padStart(3, '0');
+            return `${alphaPart}-${numberPart}`
         })();
-        if (mediaId == "") break;
         insertSelector = "div.hreview";
         queryUrl = generateAVQueryURL(mediaId);
         break;
@@ -60,5 +62,5 @@ const generateIVQueryURL = queryString => `https://watchjavidol.com/?s=${querySt
         queryUrl = generateIVQueryURL(mediaId);
         break;
     }
-    embedLink(mediaId, insertSelector, queryUrl);
+    if (mediaId) embedLink(mediaId, insertSelector, queryUrl);
 })();
