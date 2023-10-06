@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Insert AV/IV query link
-// @version      0.8
+// @version      0.9
 // @description  Insert AV/IV query link
 // @author       mechchorogi
 // @match        https://adult.contents.fc2.com/article/*/
@@ -36,6 +36,7 @@ const generateIVQueryURL = queryString => `https://watchjavidol.com/?s=${querySt
     switch (document.location.host) {
     case "adult.contents.fc2.com":
         const lastSegment = document.location.href.split('/').slice(-2)[0];
+        if (!lastSegment) { break; }
         mediaId = `FC2-PPV-${lastSegment}`;
         insertSelector = ".items_article_headerInfo h3";
         queryUrl = generateAVQueryURL(mediaId);
@@ -57,7 +58,7 @@ const generateIVQueryURL = queryString => `https://watchjavidol.com/?s=${querySt
         queryUrl = generateAVQueryURL(mediaId);
         break;
     case "idolerotic.net":
-        mediaId = document.querySelector('div.eee p:last-child font:last-child').innerText.split('：').pop();
+        mediaId = document.querySelector('div.eee p:last-child font:last-child')?.innerText.split('：').pop();
         insertSelector = "h1.entry-title";
         queryUrl = generateIVQueryURL(mediaId);
         break;
