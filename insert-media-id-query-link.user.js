@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Insert AV/IV query link
-// @version      0.6
+// @version      0.7
 // @description  Insert AV/IV query link
 // @author       mechchorogi
 // @match        https://adult.contents.fc2.com/article/*/
@@ -41,7 +41,7 @@ const generateIVQueryURL = queryString => `https://watchjavidol.com/?s=${querySt
         queryUrl = generateAVQueryURL(mediaId);
         break;
     case "www.dmm.co.jp":
-        preMediaId = document.location.href.replace(/.*\/cid=[h\d_]*(\D+)(\d+)\/.*/, "$1-$2");
+        let preMediaId = document.location.href.replace(/.*\/cid=[h\d_]*(\D+)(\d+)\/.*/, "$1-$2");
         mediaId = (() => {
             const regex = /(\w+)-0*(\d+)/;
             const match = preMediaId.match(regex);
