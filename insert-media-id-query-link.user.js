@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         Insert AV/IV query link
-// @version      0.11
+// @version      0.12
 // @description  Insert AV/IV query link
 // @author       mechchorogi
 // @match        https://adult.contents.fc2.com/article/*/
 // @match        https://www.dmm.co.jp/digital/videoa/*
+// @match        https://www.dmm.co.jp/digital/videoc/*
 // @match        http://idolerotic.net/*
 // @match        https://idolerotic.net/*
 // @grant        none
