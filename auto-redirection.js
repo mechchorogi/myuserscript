@@ -3,6 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @version      0.5
 // @description  Unified script to handle automatic redirection/click for various sites
+// @author       mechchorogi
 // @match        http://www.pinktower.com/*
 // @match        https://www.tumblr.com/safe-mode?*
 // @match        https://jump.5ch.net/*
