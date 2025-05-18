@@ -30,9 +30,13 @@ class Book {
         this.tags     = this.#getList('td.relatedtags li', tag => tag != "...");
     }
     vanish(key, blacklist) {
-        let candidates = Array.isArray(this[key]) ? this[key] : [this[key]];  // make an array for common processing
-        let union = [...candidates.map(e => e.toLowerCase()), ...blacklist.map(e => e.toLowerCase())];
-        if (union.length != new Set(union).size) {
+        let candidates = Array.isArray(this[key]) ? this[key] : [this[key]];
+        let lcCandidates = candidates.map(e => e.toLowerCase());
+        let lcBlacklist  = blacklist.map(e => e.toLowerCase());
+
+        let match = lcCandidates.find(val => lcBlacklist.includes(val));
+        if (match) {
+            console.log(`[Filtered] key: ${key}, match: "${match}", title: "${this.title}"`);
             this.elem.style.display = "none";
         }
     }
