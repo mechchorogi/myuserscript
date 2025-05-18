@@ -29,6 +29,7 @@ class Book {
         this.language = this.#getText('table.dj-desc tr:nth-of-type(3) td:nth-of-type(2)');
         this.tags     = this.#getList('td.relatedtags li', tag => tag != "...");
     }
+
     vanish(key, blacklist) {
         let candidates = Array.isArray(this[key]) ? this[key] : [this[key]];
         let lcCandidates = candidates.map(e => e.toLowerCase());
@@ -40,9 +41,11 @@ class Book {
             this.elem.style.display = "none";
         }
     }
+
     #getText(selector) {
         return this.elem.querySelector(selector).textContent;
     }
+
     #getList(selector, filter) {
         let arr = Array.from(this.elem.querySelectorAll(selector), item => item.textContent);
         filter && (arr = arr.filter(filter));
@@ -83,7 +86,7 @@ class Book {
 
     let blackList = await loadBlackList();
 
-    const observer = new MutationObserver(records => filter(blackList));
+    const observer = new MutationObserver(() => filter(blackList));
 
     observer.observe(document.querySelector('div.gallery-content'), {childList: true, subtree: true});
 })();
