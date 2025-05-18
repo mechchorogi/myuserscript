@@ -1,23 +1,14 @@
 // ==UserScript==
 // @name         Hitomi::Filter
 // @namespace    http://hitomi.la/
-// @version      1.1
-// @description  Filter hitomi.la using blacklist
+// @version      2.0.0
+// @description  Filter hitomi.la using local GM-stored blacklist
 // @author       mechchorogi
 // @match        https://hitomi.la/*
 // @icon         https://www.google.com/s2/favicons?domain=hitomi.la
-// @grant        none
+// @grant        GM.getValue
 // @run-at       document-start
 // ==/UserScript==
-
-const BLACKLIST_GIST = "https://gist.githubusercontent.com/mechchorogi/03b23ad30b01f1823eacc3ca3dbc6e24";
-const GIST_HASH      = "0fbe377e5dd3be92917027d9d2591bcf5c9be101";
-const AUTHOR_BLACKLIST   = `${BLACKLIST_GIST}/raw/${GIST_HASH}/author.json`;
-const LANGUAGE_BLACKLIST = `${BLACKLIST_GIST}/raw/${GIST_HASH}/language.json`;
-const SERIES_BLACKLIST   = `${BLACKLIST_GIST}/raw/${GIST_HASH}/series.json`;
-const TAG_BLACKLIST      = `${BLACKLIST_GIST}/raw/${GIST_HASH}/tag.json`;
-const TITLE_BLACKLIST    = `${BLACKLIST_GIST}/raw/${GIST_HASH}/title.json`;
-const TYPE_BLACKLIST     = `${BLACKLIST_GIST}/raw/${GIST_HASH}/type.json`;
 
 class Book {
     constructor(elem) {
@@ -56,24 +47,15 @@ class Book {
 (async () => {
     'use strict';
 
-    const fetchBlackList = async (url) => {
-        const response = await fetch(url);
-        if (!response.ok) {
-            console.warn(`Failed to fetch ${url}`);
-            return [];
-        }
-        return await response.json();
-    };
+    const KEYS = ['author', 'language', 'series', 'tag', 'title', 'type'];
 
     const loadBlackList = async () => {
-        return {
-            author:   await fetchBlackList(AUTHOR_BLACKLIST),
-            language: await fetchBlackList(LANGUAGE_BLACKLIST),
-            series:   await fetchBlackList(SERIES_BLACKLIST),
-            tag:      await fetchBlackList(TAG_BLACKLIST),
-            title:    await fetchBlackList(TITLE_BLACKLIST),
-            type:     await fetchBlackList(TYPE_BLACKLIST)
-        };
+        const data = {};
+        for (const key of KEYS) {
+            const raw = await GM.getValue(`blacklist_${key}`, '');
+            data[key] = raw.split('\n').map(s => s.trim()).filter(Boolean);
+        }
+        return data;
     };
 
     const filter = (blackList) => {
