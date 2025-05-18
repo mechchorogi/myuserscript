@@ -3,7 +3,7 @@
 // @namespace    https://www.nicovideo.jp/
 // @version      1.0.0
 // @description  Hide nico news sticker
-// @author       You
+// @author       mechchorogi
 // @match        https://www.nicovideo.jp/watch/*
 // @icon         https://www.google.com/s2/favicons?domain=nicovideo.jp
 // @grant        none
