@@ -11,12 +11,13 @@
 // ==/UserScript==
 
 const BLACKLIST_GIST = "https://gist.githubusercontent.com/mechchorogi/03b23ad30b01f1823eacc3ca3dbc6e24";
-const AUTHOR_BLACKLIST   = ${BLACKLIST_GIST}/raw/author.json;
-const LANGUAGE_BLACKLIST = ${BLACKLIST_GIST}/raw/language.json;
-const SERIES_BLACKLIST   = ${BLACKLIST_GIST}/raw/series.json;
-const TAG_BLACKLIST      = ${BLACKLIST_GIST}/raw/tag.json;
-const TITLE_BLACKLIST    = ${BLACKLIST_GIST}/raw/title.json;
-const TYPE_BLACKLIST     = ${BLACKLIST_GIST}/raw/type.json;
+const GIST_HASH      = "0fbe377e5dd3be92917027d9d2591bcf5c9be101";
+const AUTHOR_BLACKLIST   = `${BLACKLIST_GIST}/raw/${GIST_HASH}/author.json`;
+const LANGUAGE_BLACKLIST = `${BLACKLIST_GIST}/raw/${GIST_HASH}/language.json`;
+const SERIES_BLACKLIST   = `${BLACKLIST_GIST}/raw/${GIST_HASH}/series.json`;
+const TAG_BLACKLIST      = `${BLACKLIST_GIST}/raw/${GIST_HASH}/tag.json`;
+const TITLE_BLACKLIST    = `${BLACKLIST_GIST}/raw/${GIST_HASH}/title.json`;
+const TYPE_BLACKLIST     = `${BLACKLIST_GIST}/raw/${GIST_HASH}/type.json`;
 
 class Book {
     constructor(elem) {
