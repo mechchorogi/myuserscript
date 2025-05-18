@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Remove pocket cushion page
 // @namespace    https://getpocket.com
-// @version      0.1
+// @version      1.0.0
 // @description  Remove cushion page on getpocket.com
 // @author       mechchorogi
 // @match        https://getpocket.com/my-list
