@@ -39,7 +39,7 @@
             const mediaId = match[1];
             return {
                 mediaId,
-                insertSelector: "h1",
+                insertSelector: "h1.tag",
                 urlBuilder: makeAVUrl
             };
         },
