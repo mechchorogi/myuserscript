@@ -1,12 +1,13 @@
 // ==UserScript==
 // @name         Insert AV/IV query link
-// @version      1.1.0
+// @version      1.2.0
 // @description  Insert AV/IV query link
 // @author       mechchorogi
 // @match        https://adult.contents.fc2.com/article/*/
 // @match        https://www.dmm.co.jp/digital/video*/*
 // @match        http://idolerotic.net/*
 // @match        https://idolerotic.net/*
+// @match        https://www.mgstage.com/product/product_detail/*
 // @grant        none
 // ==/UserScript==
 
@@ -31,6 +32,16 @@
     }
 
     const siteHandlers = {
+        "www.mgstage.com": () => {
+            const match = location.pathname.match(/\/product\/product_detail\/([A-Z]+-\d+)/);
+            if (!match) return null;
+            const mediaId = match[1];
+            return {
+                mediaId,
+                insertSelector: "h1.tag",
+                urlBuilder: makeAVUrl
+            };
+        },
         "adult.contents.fc2.com": () => {
             const idSegment = location.href.split('/').slice(-2)[0];
             return {
