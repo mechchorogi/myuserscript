@@ -33,12 +33,13 @@
 
     const siteHandlers = {
         "www.mgstage.com": () => {
-            const match = location.pathname.match(/\/product\/product_detail\/([A-Z]+-\d+)/);
+            const match = location.pathname.match(/\/product\/product_detail\/(?:\d+)?([A-Z]+-\d+)/);
             if (!match) return null;
+
             const mediaId = match[1];
             return {
                 mediaId,
-                insertSelector: "h1.tag",
+                insertSelector: "h1",
                 urlBuilder: makeAVUrl
             };
         },
