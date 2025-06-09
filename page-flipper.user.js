@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Page Flipper
 // @namespace    http://tampermonkey.net/
-// @version      0.3.0
+// @version      0.3.1
 // @description  Use arrow keys to flip pages on supported sites
 // @match        https://hitomi.la/*
 // @match        https://tktube.com/*
@@ -21,7 +21,7 @@
             ArrowLeft: 'div.pagination-holder > ul > li.prev a',
             ArrowRight: 'div.pagination-holder > ul > li.next a'
         },
-        'pictoa.com': {
+        'jp.pictoa.com': {
             ArrowLeft: 'a#prev',
             ArrowRight: 'a#next',
         },
