@@ -5,6 +5,7 @@
 // @description  Use arrow keys to flip pages on supported sites
 // @match        https://hitomi.la/*
 // @match        https://tktube.com/*
+// @match        https://jp.pictoa.com/*
 // @grant        none
 // ==/UserScript==
 
@@ -19,7 +20,11 @@
         'tktube.com': {
             ArrowLeft: 'div.pagination-holder > ul > li.prev a',
             ArrowRight: 'div.pagination-holder > ul > li.next a'
-        }
+        },
+        'pictoa.com': {
+            ArrowLeft: 'a#prev',
+            ArrowRight: 'a#next',
+        },
     };
 
     const currentHost = location.hostname;
