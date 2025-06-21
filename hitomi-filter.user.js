@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hitomi::Filter
 // @namespace    http://hitomi.la/
-// @version      3.1.0
+// @version      3.1.1
 // @description  Filter hitomi.la using local GM-stored blacklist with integrated UI and foldable elements
 // @author       mechchorogi
 // @match        https://hitomi.la/*
@@ -105,13 +105,11 @@ function filter(blackList) {
 
 function observeGallery(blackList) {
     const gallery = document.querySelector('div.gallery-content');
-    if (!gallery) return; // galleryが存在しない異常ケースには何もしない
+    if (!gallery) return;
 
     if (gallery.children.length > 0) {
-        // 子要素がすでにある場合はすぐにフィルター適用
         filter(blackList);
     } else {
-        // 子要素がまだ無いので、追加されたら一度だけfilter()を呼ぶ
         const observer = new MutationObserver(() => {
             if (gallery.children.length > 0) {
                 observer.disconnect();
