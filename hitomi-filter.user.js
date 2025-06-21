@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hitomi::Filter
 // @namespace    http://hitomi.la/
-// @version      3.3.1
+// @version      3.4.0
 // @description  Filter hitomi.la using local GM-stored blacklist with integrated UI and foldable elements
 // @author       mechchorogi
 // @match        https://hitomi.la/*
@@ -155,27 +155,15 @@ async function blacklistClickHandler(e) {
     }
 }
 
-function createUI() {
-    const toggleBtn = document.createElement('button');
-    toggleBtn.id = 'hitomi-filter-toggle';
-    toggleBtn.textContent = '⚙️ Filter Settings';
-    Object.assign(toggleBtn.style, {
-        position: 'fixed',
-        top: '10px',
-        left: '10px',
-        zIndex: 9999,
-        fontSize: '14px'
-    });
-
+async function createUI() {
     const panel = document.createElement('div');
     panel.id = 'hitomi-filter-panel';
-    panel.style.display = 'none';
     Object.assign(panel.style, {
         position: 'fixed',
         top: '10px',
         bottom: '10px',
-        left: '10px',
-        width: '300px',
+        right: '10px',
+        width: '150px',
         overflowY: 'auto',
         background: 'rgba(255, 255, 255, 0.85)',
         border: '1px solid rgba(0, 0, 0, 0.1)',
@@ -214,36 +202,12 @@ function createUI() {
     saveBtn.textContent = 'Save';
     saveBtn.disabled = true;
 
-    const closeBtn = document.createElement('button');
-    closeBtn.id = 'hitomi-filter-close';
-    closeBtn.textContent = 'Close';
-
     saveBtn.addEventListener('click', async () => {
         await saveBlacklistFromInputs(panel);
         const blackList = await loadBlacklist();
         filter(blackList);
         saveBtn.disabled = true;
         state.dirty = false;
-    });
-
-    closeBtn.addEventListener('click', () => {
-        if (state.dirty) {
-            if (confirm('You have unsaved changes. Close without saving?')) {
-                panel.style.display = 'none';
-                // Reset Blacklist Mode
-                markModeBtn.dataset.active = 'false';
-                markModeBtn.style.background = '';
-                document.body.removeEventListener('click', blacklistClickHandler, true);
-                state.dirty = false;
-                saveBtn.disabled = true;
-            }
-        } else {
-            panel.style.display = 'none';
-            // Reset Blacklist Mode
-            markModeBtn.dataset.active = 'false';
-            markModeBtn.style.background = '';
-            document.body.removeEventListener('click', blacklistClickHandler, true);
-        }
     });
 
     // Insert Export and Import buttons
@@ -295,7 +259,7 @@ function createUI() {
 
     panel.appendChild(form);
 
-    // Group Save/Close, Blacklist Mode, and Export/Import buttons into three vertical rows
+    // Group Save, Blacklist Mode, and Export/Import buttons into three vertical rows
     const buttonRow = document.createElement('div');
     Object.assign(buttonRow.style, {
         marginTop: '10px',
@@ -310,7 +274,6 @@ function createUI() {
         gap: '10px'
     });
     group1.appendChild(saveBtn);
-    group1.appendChild(closeBtn);
 
     // Add the new "Blacklist Mode" toggle button
     const markModeBtn = document.createElement('button');
@@ -337,6 +300,12 @@ function createUI() {
     buttonRow.appendChild(group3);
     panel.appendChild(buttonRow);
 
+    // Load and populate existing blacklist values
+    for (let k of KEYS) {
+        const value = await GM.getValue(`blacklist_${k}`, '');
+        panel.querySelector(`#blacklist-input-${k}`).value = value;
+    }
+
     markModeBtn.addEventListener('click', () => {
         const active = markModeBtn.dataset.active === 'true';
         markModeBtn.dataset.active = String(!active);
@@ -348,21 +317,6 @@ function createUI() {
         }
     });
 
-    toggleBtn.addEventListener('click', async () => {
-        if (panel.style.display === 'none') {
-            for (let k of KEYS) {
-                const value = await GM.getValue(`blacklist_${k}`, '');
-                panel.querySelector(`#blacklist-input-${k}`).value = value;
-            }
-            panel.style.display = 'block';
-            state.dirty = false;
-            saveBtn.disabled = true;
-        } else {
-            panel.style.display = 'none';
-        }
-    });
-
-    document.body.appendChild(toggleBtn);
     document.body.appendChild(panel);
 }
 
@@ -377,7 +331,8 @@ document.head.appendChild(style);
 
 (async () => {
     'use strict';
-    createUI();
+    if (location.pathname.startsWith('/reader/')) return;
+    await createUI();
     const blackList = await loadBlacklist();
     observeGallery(blackList);
 })();
