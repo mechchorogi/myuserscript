@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hitomi::Filter
 // @namespace    http://hitomi.la/
-// @version      3.2.0
+// @version      3.3.0
 // @description  Filter hitomi.la using local GM-stored blacklist with integrated UI and foldable elements
 // @author       mechchorogi
 // @match        https://hitomi.la/*
@@ -120,6 +120,41 @@ function observeGallery(blackList) {
     }
 }
 
+async function blacklistClickHandler(e) {
+    if (e.target.closest('#hitomi-filter-panel')) return;
+
+    // prevent link navigation in blacklist mode
+    const link = e.target.closest('a');
+    if (link) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+
+    const elem = e.target;
+    const map = [
+        { selector: 'div.artist-list li a', key: 'author' },
+        { selector: 'td.relatedtags li a', key: 'tag' },
+        { selector: 'table.dj-desc tr:nth-of-type(1) td:nth-of-type(2) li a', key: 'series' },
+        { selector: 'table.dj-desc tr:nth-of-type(2) td:nth-of-type(2) a', key: 'type' },
+        { selector: 'table.dj-desc tr:nth-of-type(3) td:nth-of-type(2) a', key: 'language' },
+        { selector: 'h1.lillie a', key: 'title' }
+    ];
+    for (let { selector, key } of map) {
+        if (elem.matches(selector)) {
+            const value = elem.textContent.trim();
+            const current = await GM.getValue(`blacklist_${key}`, '');
+            const lines = new Set(current.split('\n').map(l => l.trim()).filter(Boolean));
+            lines.add(value);
+            await GM.setValue(`blacklist_${key}`, [...lines].join('\n'));
+            const input = document.querySelector(`#blacklist-input-${key}`);
+            if (input) input.value = [...lines].join('\n');
+            const blackList = await loadBlacklist();
+            filter(blackList);
+            break;
+        }
+    }
+}
+
 function createUI() {
     const toggleBtn = document.createElement('button');
     toggleBtn.id = 'hitomi-filter-toggle';
@@ -140,7 +175,7 @@ function createUI() {
         top: '10px',
         bottom: '10px',
         left: '10px',
-        width: '600px',
+        width: '300px',
         overflowY: 'auto',
         background: 'rgba(255, 255, 255, 0.85)',
         border: '1px solid rgba(0, 0, 0, 0.1)',
@@ -252,13 +287,13 @@ function createUI() {
 
     panel.appendChild(form);
 
-    // Group Save/Close and Export/Import buttons into two flex groups with spacing
+    // Group Save/Close, Blacklist Mode, and Export/Import buttons into three vertical rows
     const buttonRow = document.createElement('div');
     Object.assign(buttonRow.style, {
         marginTop: '10px',
         display: 'flex',
-        gap: '20px',
-        flexWrap: 'wrap'
+        flexDirection: 'column',
+        gap: '10px'
     });
 
     const group1 = document.createElement('div');
@@ -269,17 +304,41 @@ function createUI() {
     group1.appendChild(saveBtn);
     group1.appendChild(closeBtn);
 
+    // Add the new "Blacklist Mode" toggle button
+    const markModeBtn = document.createElement('button');
+    markModeBtn.textContent = '🖊️ Blacklist Mode';
+    markModeBtn.dataset.active = 'false';
+
     const group2 = document.createElement('div');
     Object.assign(group2.style, {
         display: 'flex',
         gap: '10px'
     });
-    group2.appendChild(exportBtn);
-    group2.appendChild(importBtn);
+    group2.appendChild(markModeBtn);
+
+    const group3 = document.createElement('div');
+    Object.assign(group3.style, {
+        display: 'flex',
+        gap: '10px'
+    });
+    group3.appendChild(exportBtn);
+    group3.appendChild(importBtn);
 
     buttonRow.appendChild(group1);
     buttonRow.appendChild(group2);
+    buttonRow.appendChild(group3);
     panel.appendChild(buttonRow);
+
+    markModeBtn.addEventListener('click', () => {
+        const active = markModeBtn.dataset.active === 'true';
+        markModeBtn.dataset.active = String(!active);
+        markModeBtn.style.background = !active ? '#ffcccc' : '';
+        if (!active) {
+            document.body.addEventListener('click', blacklistClickHandler, true);
+        } else {
+            document.body.removeEventListener('click', blacklistClickHandler, true);
+        }
+    });
 
     toggleBtn.addEventListener('click', async () => {
         if (panel.style.display === 'none') {
