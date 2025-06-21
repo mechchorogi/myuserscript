@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hitomi::Filter
 // @namespace    http://hitomi.la/
-// @version      3.3.0
+// @version      3.3.1
 // @description  Filter hitomi.la using local GM-stored blacklist with integrated UI and foldable elements
 // @author       mechchorogi
 // @match        https://hitomi.la/*
@@ -230,11 +230,19 @@ function createUI() {
         if (state.dirty) {
             if (confirm('You have unsaved changes. Close without saving?')) {
                 panel.style.display = 'none';
+                // Reset Blacklist Mode
+                markModeBtn.dataset.active = 'false';
+                markModeBtn.style.background = '';
+                document.body.removeEventListener('click', blacklistClickHandler, true);
                 state.dirty = false;
                 saveBtn.disabled = true;
             }
         } else {
             panel.style.display = 'none';
+            // Reset Blacklist Mode
+            markModeBtn.dataset.active = 'false';
+            markModeBtn.style.background = '';
+            document.body.removeEventListener('click', blacklistClickHandler, true);
         }
     });
 
