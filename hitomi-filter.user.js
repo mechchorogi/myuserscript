@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hitomi::Filter
 // @namespace    http://hitomi.la/
-// @version      3.1.1
+// @version      3.1.2
 // @description  Filter hitomi.la using local GM-stored blacklist with integrated UI and foldable elements
 // @author       mechchorogi
 // @match        https://hitomi.la/*
@@ -127,7 +127,7 @@ function createUI() {
     Object.assign(toggleBtn.style, {
         position: 'fixed',
         top: '10px',
-        right: '10px',
+        left: '10px',
         zIndex: 9999,
         fontSize: '14px'
     });
@@ -137,14 +137,18 @@ function createUI() {
     panel.style.display = 'none';
     Object.assign(panel.style, {
         position: 'fixed',
-        top: '40px',
-        right: '10px',
+        top: '10px',
+        bottom: '10px',
+        left: '10px',
         width: '600px',
-        maxHeight: '80vh',
         overflowY: 'auto',
-        background: 'white',
-        border: '1px solid #ccc',
-        padding: '10px',
+        background: 'rgba(255, 255, 255, 0.85)',
+        border: '1px solid rgba(0, 0, 0, 0.1)',
+        borderRadius: '8px',
+        padding: '16px',
+        boxShadow: '0 4px 20px rgba(0, 0, 0, 0.1)',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif',
+        fontSize: '14px',
         zIndex: 9999
     });
 
@@ -153,7 +157,7 @@ function createUI() {
 
     for (let k of KEYS) {
         const label = document.createElement('label');
-        label.textContent = k;
+        label.textContent = k.charAt(0).toUpperCase() + k.slice(1).toLowerCase() + ':';
         label.style.display = 'block';
         label.style.marginTop = '8px';
 
@@ -174,13 +178,10 @@ function createUI() {
     saveBtn.id = 'hitomi-filter-save';
     saveBtn.textContent = 'Save';
     saveBtn.disabled = true;
-    saveBtn.style.marginTop = '10px';
 
     const closeBtn = document.createElement('button');
     closeBtn.id = 'hitomi-filter-close';
     closeBtn.textContent = 'Close';
-    closeBtn.style.marginLeft = '10px';
-    closeBtn.style.marginTop = '10px';
 
     saveBtn.addEventListener('click', async () => {
         await saveBlacklistFromInputs(panel);
