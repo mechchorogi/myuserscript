@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hitomi::Page Progress
 // @namespace    http://hitomi.la/
-// @version      1.0.0
+// @version      1.0.1
 // @description  Show page progress on hitomi.la reader
 // @author       mechchorogi
 // @match        https://hitomi.la/reader/*
@@ -19,6 +19,7 @@
     progressDisplay.id = 'hitomi-page-progress-text';
     progressDisplay.style.color = 'white';
     progressDisplay.style.padding = '8px';
+    progressDisplay.style.alignSelf = 'center';
 
     const progressContainer = document.createElement('div');
     progressContainer.id = 'hitomi-page-progress-container';
