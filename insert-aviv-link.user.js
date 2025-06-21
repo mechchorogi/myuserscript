@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Insert AV/IV query link
-// @version      1.3
+// @version      1.4
 // @description  Insert AV/IV query link
 // @author       mechchorogi
 // @match        https://adult.contents.fc2.com/article/*/
@@ -8,6 +8,7 @@
 // @match        http://idolerotic.net/*
 // @match        https://idolerotic.net/*
 // @match        https://www.mgstage.com/product/product_detail/*
+// @match        https://www.dlsite.com/*
 // @grant        none
 // ==/UserScript==
 
@@ -17,6 +18,7 @@
     const transformForTktube = query => query.replace(/-/g, "--");
     const makeAVUrl = query => `https://tktube.com/search/${transformForTktube(query)}/`;
     const makeIVUrl = query => `https://watchjavidol.com/?s=${query}`;
+    const makeHitomiUrl = query => `https://hitomi.la/search.html?${query}`;
 
     function extractMediaIdFromDmm() {
         const cidMatch = location.href.match(/.*\/cid=([^\/?&]+)/);
@@ -68,6 +70,15 @@
                 mediaId,
                 insertSelector: "h1.entry-title",
                 urlBuilder: makeIVUrl
+            };
+        },
+        "www.dlsite.com": () => {
+            const text = document.querySelector('h1#work_name')?.innerText;
+            if (!text) return null;
+            return {
+                mediaId: text,
+                insertSelector: "div.base_title_br",
+                urlBuilder: makeHitomiUrl
             };
         }
     };
