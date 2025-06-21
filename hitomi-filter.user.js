@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hitomi::Filter
 // @namespace    http://hitomi.la/
-// @version      3.1.2
+// @version      3.2.0
 // @description  Filter hitomi.la using local GM-stored blacklist with integrated UI and foldable elements
 // @author       mechchorogi
 // @match        https://hitomi.la/*
@@ -203,9 +203,83 @@ function createUI() {
         }
     });
 
+    // Insert Export and Import buttons
+    const exportBtn = document.createElement('button');
+    exportBtn.textContent = 'Export';
+
+    const importBtn = document.createElement('button');
+    importBtn.textContent = 'Import';
+
+    exportBtn.addEventListener('click', async () => {
+        const data = {};
+        for (let k of KEYS) {
+            const value = await GM.getValue(`blacklist_${k}`, '');
+            data[k] = value;
+        }
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'hitomi-filter-backup.json';
+        a.click();
+        URL.revokeObjectURL(url);
+    });
+
+    importBtn.addEventListener('click', () => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json,application/json';
+        input.addEventListener('change', async () => {
+            if (!input.files.length) return;
+            const file = input.files[0];
+            const text = await file.text();
+            try {
+                const data = JSON.parse(text);
+                for (let k of KEYS) {
+                    if (typeof data[k] === 'string') {
+                        await GM.setValue(`blacklist_${k}`, data[k]);
+                        panel.querySelector(`#blacklist-input-${k}`).value = data[k];
+                    }
+                }
+                const blackList = await loadBlacklist();
+                filter(blackList);
+            } catch (e) {
+                alert('Invalid file format');
+            }
+        });
+        input.click();
+    });
+
     panel.appendChild(form);
-    panel.appendChild(saveBtn);
-    panel.appendChild(closeBtn);
+
+    // Group Save/Close and Export/Import buttons into two flex groups with spacing
+    const buttonRow = document.createElement('div');
+    Object.assign(buttonRow.style, {
+        marginTop: '10px',
+        display: 'flex',
+        gap: '20px',
+        flexWrap: 'wrap'
+    });
+
+    const group1 = document.createElement('div');
+    Object.assign(group1.style, {
+        display: 'flex',
+        gap: '10px'
+    });
+    group1.appendChild(saveBtn);
+    group1.appendChild(closeBtn);
+
+    const group2 = document.createElement('div');
+    Object.assign(group2.style, {
+        display: 'flex',
+        gap: '10px'
+    });
+    group2.appendChild(exportBtn);
+    group2.appendChild(importBtn);
+
+    buttonRow.appendChild(group1);
+    buttonRow.appendChild(group2);
+    panel.appendChild(buttonRow);
 
     toggleBtn.addEventListener('click', async () => {
         if (panel.style.display === 'none') {
