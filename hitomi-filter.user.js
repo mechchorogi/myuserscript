@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hitomi::Filter
 // @namespace    http://hitomi.la/
-// @version      3.0.0
-// @description  Filter hitomi.la using local GM-stored blacklist with integrated UI
+// @version      3.1.0
+// @description  Filter hitomi.la using local GM-stored blacklist with integrated UI and foldable elements
 // @author       mechchorogi
 // @match        https://hitomi.la/*
 // @icon         https://www.google.com/s2/favicons?domain=hitomi.la
@@ -24,18 +24,44 @@ class Book {
         this.type     = this.#getText('table.dj-desc tr:nth-of-type(2) td:nth-of-type(2)');
         this.language = this.#getText('table.dj-desc tr:nth-of-type(3) td:nth-of-type(2)');
         this.tags     = this.#getList('td.relatedtags li', tag => tag !== "...");
+
+        const header = this.elem.querySelector('h1.lillie');
+        if (header) {
+            header.style.cursor = 'pointer';
+            header.addEventListener('click', () => {
+                if (this.#isFolded()) {
+                    this.#unfold();
+                } else {
+                    this.#fold();
+                }
+            });
+        }
+
+        this.elem.style.position = 'relative';
+        this.#unfold();
     }
 
-    vanish(key, blacklist) {
-        const candidates = Array.isArray(this[key]) ? this[key] : [this[key]];
-        const lcCandidates = candidates.map(e => e.toLowerCase());
-        const lcBlacklist = blacklist.map(e => e.toLowerCase());
+    #isFolded() {
+        return this.elem.classList.contains('hitomi-folded');
+    }
 
-        const match = lcCandidates.find(val => lcBlacklist.includes(val));
-        if (match) {
-            console.log(`[Filtered] key: ${key}, match: "${match}", title: "${this.title}"`);
-            this.elem.style.display = "none";
-        }
+    fold() {
+        if (this.#isFolded()) return;
+        this.#fold();
+    }
+
+    #fold() {
+        this.elem.classList.add('hitomi-folded');
+        this.elem.querySelectorAll(':scope > *:not(h1.lillie):not(.hitomi-toggle)').forEach(c => {
+            c.style.display = 'none';
+        });
+    }
+
+    #unfold() {
+        this.elem.classList.remove('hitomi-folded');
+        this.elem.querySelectorAll(':scope > *:not(h1.lillie):not(.hitomi-toggle)').forEach(c => {
+            c.style.display = '';
+        });
     }
 
     #getText(selector) {
@@ -66,34 +92,33 @@ async function saveBlacklistFromInputs(container) {
 }
 
 function filter(blackList) {
-    const books = Array.from(document.querySelectorAll('body > div > div.gallery-content > div'), elem => new Book(elem));
-    books.forEach(book => {
-        book.vanish('language', blackList.language);
-        book.vanish('authors',  blackList.author);
-        book.vanish('tags',     blackList.tag);
-        book.vanish('series',   blackList.series);
-        book.vanish('title',    blackList.title);
-        book.vanish('type',     blackList.type);
+    document.querySelectorAll('body > div > div.gallery-content > div').forEach(elem => {
+        const book = new Book(elem);
+        if (blackList.language.some(x => book.language.toLowerCase() === x.toLowerCase())) book.fold();
+        if (blackList.author.some(x => book.authors.map(a => a.toLowerCase()).includes(x.toLowerCase()))) book.fold();
+        if (blackList.tag.some(x => book.tags.map(t => t.toLowerCase()).includes(x.toLowerCase()))) book.fold();
+        if (blackList.series.some(x => book.series.map(s => s.toLowerCase()).includes(x.toLowerCase()))) book.fold();
+        if (blackList.title.some(x => book.title.toLowerCase().includes(x.toLowerCase()))) book.fold();
+        if (blackList.type.some(x => book.type.toLowerCase() === x.toLowerCase())) book.fold();
     });
 }
 
 function observeGallery(blackList) {
     const gallery = document.querySelector('div.gallery-content');
-    if (gallery) {
+    if (!gallery) return; // galleryが存在しない異常ケースには何もしない
+
+    if (gallery.children.length > 0) {
+        // 子要素がすでにある場合はすぐにフィルター適用
         filter(blackList);
-        const observer = new MutationObserver(() => filter(blackList));
-        observer.observe(gallery, { childList: true, subtree: true });
     } else {
-        const htmlObserver = new MutationObserver(() => {
-            const galleryNow = document.querySelector('div.gallery-content');
-            if (galleryNow) {
-                htmlObserver.disconnect();
+        // 子要素がまだ無いので、追加されたら一度だけfilter()を呼ぶ
+        const observer = new MutationObserver(() => {
+            if (gallery.children.length > 0) {
+                observer.disconnect();
                 filter(blackList);
-                const observer = new MutationObserver(() => filter(blackList));
-                observer.observe(galleryNow, { childList: true, subtree: true });
             }
         });
-        htmlObserver.observe(document.documentElement, { childList: true, subtree: true });
+        observer.observe(gallery, { childList: true });
     }
 }
 
@@ -200,6 +225,15 @@ function createUI() {
     document.body.appendChild(toggleBtn);
     document.body.appendChild(panel);
 }
+
+const style = document.createElement('style');
+style.textContent = `
+  .hitomi-folded h1.lillie {
+    padding-left: 0 !important;
+    font-size: 0.9em !important;
+  }
+`;
+document.head.appendChild(style);
 
 (async () => {
     'use strict';
