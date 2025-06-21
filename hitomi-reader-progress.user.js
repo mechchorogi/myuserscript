@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hitomi::Page Progress
 // @namespace    http://hitomi.la/
-// @version      1.0.1
+// @version      1.1.0
 // @description  Show page progress on hitomi.la reader
 // @author       mechchorogi
 // @match        https://hitomi.la/reader/*
@@ -35,6 +35,7 @@
     progressBar.style.background = '#555';
     progressBar.style.marginTop = '4px';
     progressBar.style.borderRadius = '2px';
+    progressBar.style.direction = 'rtl';
 
     const progressFill = document.createElement('div');
     progressFill.id = 'hitomi-page-progress-fill';
@@ -42,6 +43,7 @@
     progressFill.style.background = 'limegreen';
     progressFill.style.width = '0%';
     progressFill.style.borderRadius = '2px';
+    progressFill.style.marginLeft = 'auto';
 
     progressBar.appendChild(progressFill);
     progressContainer.appendChild(progressDisplay);
