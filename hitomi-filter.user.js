@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hitomi::Filter
 // @namespace    http://hitomi.la/
-// @version      3.4.0
+// @version      3.5.0
 // @description  Filter hitomi.la using local GM-stored blacklist with integrated UI and foldable elements
 // @author       mechchorogi
 // @match        https://hitomi.la/*
@@ -12,6 +12,8 @@
 // @grant        GM.deleteValue
 // @run-at       document-idle
 // ==/UserScript==
+
+let filterEnabled = true;
 
 const KEYS = ['author', 'language', 'series', 'tag', 'title', 'type'];
 
@@ -73,6 +75,17 @@ class Book {
         let arr = Array.from(this.elem.querySelectorAll(selector), item => item.textContent);
         return filter ? arr.filter(filter) : arr;
     }
+
+    set folded(state) {
+        if (state) {
+            this.fold();
+        } else {
+            this.elem.classList.remove('hitomi-folded');
+            this.elem.querySelectorAll(':scope > *:not(h1.lillie):not(.hitomi-toggle)').forEach(c => {
+                c.style.display = '';
+            });
+        }
+    }
 }
 
 async function loadBlacklist() {
@@ -92,6 +105,7 @@ async function saveBlacklistFromInputs(container) {
 }
 
 function filter(blackList) {
+    if (!filterEnabled) return;
     document.querySelectorAll('body > div > div.gallery-content > div').forEach(elem => {
         const book = new Book(elem);
         if (blackList.language.some(x => book.language.toLowerCase() === x.toLowerCase())) book.fold();
@@ -316,6 +330,36 @@ async function createUI() {
             document.body.removeEventListener('click', blacklistClickHandler, true);
         }
     });
+
+    const toggleRow = document.createElement('div');
+    Object.assign(toggleRow.style, {
+        marginTop: '16px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between'
+    });
+
+    const toggleLabel = document.createElement('label');
+    toggleLabel.textContent = 'Filter Enabled';
+
+    const toggleCheckbox = document.createElement('input');
+    toggleCheckbox.type = 'checkbox';
+    toggleCheckbox.checked = filterEnabled;
+    toggleCheckbox.addEventListener('change', () => {
+        filterEnabled = toggleCheckbox.checked;
+        if (filterEnabled) {
+            loadBlacklist().then(filter);
+        } else {
+            document.querySelectorAll('body > div > div.gallery-content > div').forEach(elem => {
+                const book = new Book(elem);
+                book.folded = false;
+            });
+        }
+    });
+
+    toggleRow.appendChild(toggleLabel);
+    toggleRow.appendChild(toggleCheckbox);
+    panel.appendChild(toggleRow);
 
     document.body.appendChild(panel);
 }
