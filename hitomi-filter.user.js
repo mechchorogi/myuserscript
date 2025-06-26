@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hitomi::Filter
 // @namespace    http://hitomi.la/
-// @version      3.5.0
+// @version      3.5.1
 // @description  Filter hitomi.la using local GM-stored blacklist with integrated UI and foldable elements
 // @author       mechchorogi
 // @match        https://hitomi.la/*
@@ -27,16 +27,29 @@ class Book {
         this.language = this.#getText('table.dj-desc tr:nth-of-type(3) td:nth-of-type(2)');
         this.tags     = this.#getList('td.relatedtags li', tag => tag !== "...");
 
+        this.elem.addEventListener('click', (e) => {
+            const header = this.elem.querySelector('h1.lillie');
+            if (!header) return;
+
+            const withinHeader = header.contains(e.target);
+            const isLink = e.target.tagName === 'A';
+
+            if (!withinHeader) return;
+
+            if (this.#isFolded()) {
+                if (isLink) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+                this.#unfold();
+            } else {
+                this.#fold();
+            }
+        });
+
         const header = this.elem.querySelector('h1.lillie');
         if (header) {
             header.style.cursor = 'pointer';
-            header.addEventListener('click', () => {
-                if (this.#isFolded()) {
-                    this.#unfold();
-                } else {
-                    this.#fold();
-                }
-            });
         }
 
         this.elem.style.position = 'relative';
