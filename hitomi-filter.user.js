@@ -344,6 +344,14 @@ async function createUI() {
         }
     });
 
+    window.markModeBtn = markModeBtn;
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'b' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+            e.preventDefault();
+            markModeBtn.click();
+        }
+    });
+
     const toggleRow = document.createElement('div');
     Object.assign(toggleRow.style, {
         marginTop: '16px',
