@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hitomi::Page Progress
 // @namespace    http://hitomi.la/
-// @version      1.1.0
+// @version      1.1.1
 // @description  Show page progress on hitomi.la reader
 // @author       mechchorogi
 // @match        https://hitomi.la/reader/*
@@ -84,7 +84,7 @@
 
         // Also listen to keyboard events (j/k and arrow keys)
         document.addEventListener('keydown', (event) => {
-            if (['j', 'k', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+            if (['j', 'k', 'ArrowLeft', 'ArrowRight', ' '].includes(event.key)) {
                 // Let the navigation occur, then update after a short delay
                 setTimeout(updateProgress, 50);
             }
