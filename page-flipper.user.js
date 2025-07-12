@@ -1,7 +1,8 @@
 // ==UserScript==
 // @name         Page Flipper
 // @namespace    http://tampermonkey.net/
-// @version      0.4.0
+// @version      1.0.0
+// @author       mechchorogi
 // @description  Use arrow keys to flip pages on supported sites
 // @match        https://hitomi.la/*
 // @match        https://tktube.com/*
