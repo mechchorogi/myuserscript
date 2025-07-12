@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Page Flipper
 // @namespace    http://tampermonkey.net/
-// @version      0.3.1
+// @version      0.4.0
 // @description  Use arrow keys to flip pages on supported sites
 // @match        https://hitomi.la/*
 // @match        https://tktube.com/*
@@ -12,28 +12,34 @@
 (function () {
     'use strict';
 
-    const keyBindingsBySite = {
+    const siteConfigs = {
         'hitomi.la': {
-            ArrowLeft: 'a[rel=prev]',
-            ArrowRight: 'a[rel=next]'
+            prevSelector: 'a#nextPanel',  // 'a#nextPanel' is actually the previous page link
+            nextSelector: 'a#prevPanel',  // 'a#PrevPanel' is actually the next page link
         },
         'tktube.com': {
-            ArrowLeft: 'div.pagination-holder > ul > li.prev a',
-            ArrowRight: 'div.pagination-holder > ul > li.next a'
+            prevSelector: 'div.pagination-holder > ul > li.prev a',
+            nextSelector: 'div.pagination-holder > ul > li.next a',
         },
         'jp.pictoa.com': {
-            ArrowLeft: 'a#prev',
-            ArrowRight: 'a#next',
+            prevSelector: 'a#prev',
+            nextSelector: 'a#next',
         },
     };
 
     const currentHost = location.hostname;
-    const keyToSelectorMap = keyBindingsBySite[currentHost];
-    if (!keyToSelectorMap) return;
+    const siteConfig = siteConfigs[currentHost];
+    if (!siteConfig) return;
 
     function handleKeyDown(event) {
-        const selector = keyToSelectorMap[event.key];
-        if (!selector) return;
+        let selector;
+        if (event.key === 'ArrowLeft' || (event.key === ' ' && !event.shiftKey)) {
+            selector = siteConfig.prevSelector;
+        } else if (event.key === 'ArrowRight' || (event.key === ' ' && event.shiftKey)) {
+            selector = siteConfig.nextSelector;
+        } else {
+            return;
+        }
 
         const target = document.querySelector(selector);
         if (target) {
