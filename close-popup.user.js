@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name         Close popup
 // @namespace    http://tampermonkey.net/
-// @version      1.1.0
+// @version      1.2.0
 // @description  Automatically close known popups on supported sites
 // @match        https://www.dmm.co.jp/*
 // @match        https://www.amazon.co.jp/*
 // @match        https://live.fc2.com/*
+// @match        https://qiita.com/*
 // @grant        none
 // ==/UserScript==
 
@@ -22,6 +23,9 @@
         ],
         'live.fc2.com': [
             'a#age_ok_btn'
+        ],
+        'qiita.com': [
+            'div[data-testid="popup-login"] button'
         ]
     };
 
