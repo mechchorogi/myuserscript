@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hitomi::Page Progress
 // @namespace    http://hitomi.la/
-// @version      1.1.1
+// @version      1.2.0
 // @description  Show page progress on hitomi.la reader
 // @author       mechchorogi
 // @match        https://hitomi.la/reader/*
@@ -11,6 +11,8 @@
 
 (function() {
     'use strict';
+
+    let lastUrl = location.href;
 
     // Create a new list item to display progress
     const li = document.createElement('li');
@@ -76,25 +78,14 @@
 
     // Observe page change events
     function observePageChange() {
-        const select = document.querySelector('#single-page-select');
-        if (!select) return;
-
-        // Add event listener for change events
-        select.addEventListener('change', updateProgress);
-
-        // Also listen to keyboard events (j/k and arrow keys)
-        document.addEventListener('keydown', (event) => {
-            if (['j', 'k', 'ArrowLeft', 'ArrowRight', ' '].includes(event.key)) {
-                // Let the navigation occur, then update after a short delay
+        // Observe URL changes
+        const urlObserver = new MutationObserver(() => {
+            if (location.href !== lastUrl) {
+                lastUrl = location.href;
                 setTimeout(updateProgress, 50);
             }
         });
-
-        // Observe changes to the selected attribute of option elements
-        const observer = new MutationObserver(updateProgress);
-        select.querySelectorAll('option').forEach(option => {
-            observer.observe(option, { attributes: true, attributeFilter: ['selected'] });
-        });
+        urlObserver.observe(document.body, { childList: true, subtree: true });
     }
 
     waitForNav();
