@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hitomi::Filter
 // @namespace    http://hitomi.la/
-// @version      3.6.0
+// @version      3.7.0
 // @description  Filter hitomi.la using local GM-stored blacklist with integrated UI and foldable elements
 // @author       mechchorogi
 // @match        https://hitomi.la/*
@@ -125,7 +125,13 @@ function filter(blackList) {
         if (blackList.author.some(x => book.authors.map(a => a.toLowerCase()).includes(x.toLowerCase()))) book.fold();
         if (blackList.tag.some(x => book.tags.map(t => t.toLowerCase()).includes(x.toLowerCase()))) book.fold();
         if (blackList.series.some(x => book.series.map(s => s.toLowerCase()).includes(x.toLowerCase()))) book.fold();
-        if (blackList.title.some(x => book.title.toLowerCase().includes(x.toLowerCase()))) book.fold();
+        if (blackList.title.some(x => {
+            try {
+                return new RegExp(x, 'i').test(book.title);
+            } catch (e) {
+                return false;
+            }
+        })) book.fold();
         if (blackList.type.some(x => book.type.toLowerCase() === x.toLowerCase())) book.fold();
     });
 }
@@ -208,6 +214,7 @@ async function createUI() {
     for (let k of KEYS) {
         const label = document.createElement('label');
         label.textContent = k.charAt(0).toUpperCase() + k.slice(1).toLowerCase() + ':';
+        if (k === 'title') label.textContent += ' (regex supported)';
         label.style.display = 'block';
         label.style.marginTop = '8px';
 
