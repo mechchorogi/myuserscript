@@ -1,8 +1,7 @@
 // ==UserScript==
 // @name         Page Flipper
 // @namespace    http://tampermonkey.net/
-// @version      1.0.0
-// @author       mechchorogi
+// @version      1.1.0
 // @description  Use arrow keys to flip pages on supported sites
 // @match        https://hitomi.la/*
 // @match        https://tktube.com/*
@@ -13,40 +12,40 @@
 (function () {
     'use strict';
 
-    const siteConfigs = {
+    const siteSettings = {
         'hitomi.la': {
-            prevSelector: 'a#nextPanel',  // 'a#nextPanel' is actually the previous page link
-            nextSelector: 'a#prevPanel',  // 'a#PrevPanel' is actually the next page link
+            nextSelector: 'a[rel=next]',
+            prevSelector: 'a[rel=prev]',
+            nextKeys: ['ArrowRight', ' '],
+            prevKeys: ['ArrowLeft', 'Shift+ ']
         },
         'tktube.com': {
-            prevSelector: 'div.pagination-holder > ul > li.prev a',
             nextSelector: 'div.pagination-holder > ul > li.next a',
+            prevSelector: 'div.pagination-holder > ul > li.prev a',
+            nextKeys: ['ArrowRight'],
+            prevKeys: ['ArrowLeft']
         },
         'jp.pictoa.com': {
-            prevSelector: 'a#prev',
             nextSelector: 'a#next',
+            prevSelector: 'a#prev',
+            nextKeys: ['ArrowRight'],
+            prevKeys: ['ArrowLeft']
         },
     };
 
     const currentHost = location.hostname;
-    const siteConfig = siteConfigs[currentHost];
-    if (!siteConfig) return;
+    const settings = siteSettings[currentHost];
+    if (!settings) return;
 
     function handleKeyDown(event) {
-        let selector;
-        if (event.key === 'ArrowLeft' || (event.key === ' ' && !event.shiftKey)) {
-            selector = siteConfig.prevSelector;
-        } else if (event.key === 'ArrowRight' || (event.key === ' ' && event.shiftKey)) {
-            selector = siteConfig.nextSelector;
-        } else {
-            return;
-        }
-
-        const target = document.querySelector(selector);
-        if (target) {
-            target.click();
+        if (settings.nextKeys.includes(event.key)) {
+            const target = document.querySelector(settings.nextSelector);
+            if (target) target.click();
+        } else if (settings.prevKeys.includes(event.key)) {
+            const target = document.querySelector(settings.prevSelector);
+            if (target) target.click();
         }
     }
 
-    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', handleKeyDown, true);
 })();
