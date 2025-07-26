@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hitomi::Filter
 // @namespace    http://hitomi.la/
-// @version      3.7.0
+// @version      3.8.0
 // @description  Filter hitomi.la using local GM-stored blacklist with integrated UI and foldable elements
 // @author       mechchorogi
 // @match        https://hitomi.la/*
