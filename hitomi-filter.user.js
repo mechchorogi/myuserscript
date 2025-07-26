@@ -136,29 +136,6 @@ function filter(blackList) {
     });
 }
 
-function observeGallery(blackList) {
-    const gallery = document.querySelector('div.gallery-content');
-    if (!gallery) return;
-
-    const hasContent = Array.from(gallery.children).some(
-        c => !(c.id === 'loader-content')
-    );
-    if (hasContent) {
-        filter(blackList);
-    } else {
-        const observer = new MutationObserver(() => {
-            const hasContent = Array.from(gallery.children).some(
-                c => !(c.id === 'loader-content')
-            );
-            if (hasContent) {
-                observer.disconnect();
-                filter(blackList);
-            }
-        });
-        observer.observe(gallery, { childList: true });
-    }
-}
-
 async function blacklistClickHandler(e) {
     if (e.target.closest('#hitomi-filter-panel')) return;
 
@@ -397,6 +374,31 @@ async function createUI() {
 
     document.body.appendChild(panel);
 }
+
+function observeGallery(blackList) {
+    const gallery = document.querySelector('div.gallery-content');
+    if (!gallery) return;
+
+    // Always observe and filter on every mutation
+    const observer = new MutationObserver(() => {
+        const hasContent = Array.from(gallery.children).some(
+            c => !(c.id === 'loader-content')
+        );
+        if (hasContent) {
+            filter(blackList);
+        }
+    });
+    observer.observe(gallery, { childList: true });
+
+    // Initial filter if content is already present
+    const hasContent = Array.from(gallery.children).some(
+        c => !(c.id === 'loader-content')
+    );
+    if (hasContent) {
+        filter(blackList);
+    }
+}
+
 
 const style = document.createElement('style');
 style.textContent = `
