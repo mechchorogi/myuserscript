@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto redirection
 // @namespace    http://tampermonkey.net/
-// @version      0.5
+// @version      1.0.0
 // @description  Unified script to handle automatic redirection/click for various sites
 // @author       mechchorogi
 // @match        http://www.pinktower.com/*
@@ -112,11 +112,7 @@
         }
 
         case 'www.dmm.co.jp': {
-            // URLを"="で分割し、インデックス2をdecodeしてリダイレクト
-            const parts = location.href.split('=');
-            if (parts[2]) {
-                redirect(decodeURIComponent(parts[2]));
-            }
+            click('div.turtle-Button a');
             break;
         }
 
