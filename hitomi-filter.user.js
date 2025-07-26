@@ -140,11 +140,17 @@ function observeGallery(blackList) {
     const gallery = document.querySelector('div.gallery-content');
     if (!gallery) return;
 
-    if (gallery.children.length > 0) {
+    const hasContent = Array.from(gallery.children).some(
+        c => !(c.id === 'loader-content')
+    );
+    if (hasContent) {
         filter(blackList);
     } else {
         const observer = new MutationObserver(() => {
-            if (gallery.children.length > 0) {
+            const hasContent = Array.from(gallery.children).some(
+                c => !(c.id === 'loader-content')
+            );
+            if (hasContent) {
                 observer.disconnect();
                 filter(blackList);
             }
