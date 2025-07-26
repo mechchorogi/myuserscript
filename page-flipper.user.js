@@ -1,9 +1,8 @@
 // ==UserScript==
 // @name         Page Flipper
 // @namespace    http://tampermonkey.net/
-// @version      1.1.0
+// @version      1.2.0
 // @description  Use arrow keys to flip pages on supported sites
-// @match        https://hitomi.la/*
 // @match        https://tktube.com/*
 // @match        https://jp.pictoa.com/*
 // @grant        none
@@ -13,12 +12,6 @@
     'use strict';
 
     const siteSettings = {
-        'hitomi.la': {
-            nextSelector: 'a[rel=next]',
-            prevSelector: 'a[rel=prev]',
-            nextKeys: ['ArrowRight', ' '],
-            prevKeys: ['ArrowLeft', 'Shift+ ']
-        },
         'tktube.com': {
             nextSelector: 'div.pagination-holder > ul > li.next a',
             prevSelector: 'div.pagination-holder > ul > li.prev a',
