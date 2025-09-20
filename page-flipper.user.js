@@ -37,13 +37,15 @@
     const settings = siteSettings[currentHost];
     if (!settings) return;
 
+    function matchKey(event, keyDef) {
+        return event.code === keyDef;
+    }
+
     function handleKeyDown(event) {
-        if (settings.nextKeys.includes(event.key)) {
-            const target = document.querySelector(settings.nextSelector);
-            if (target) target.click();
-        } else if (settings.prevKeys.includes(event.key)) {
-            const target = document.querySelector(settings.prevSelector);
-            if (target) target.click();
+        if (settings.nextKeys.some(k => matchKey(event, k))) {
+            document.querySelector(settings.nextSelector)?.click();
+        } else if (settings.prevKeys.some(k => matchKey(event, k))) {
+            document.querySelector(settings.prevSelector)?.click();
         }
     }
 
