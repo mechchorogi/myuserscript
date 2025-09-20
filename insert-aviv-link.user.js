@@ -4,7 +4,7 @@
 // @description  Insert AV/IV query link
 // @author       mechchorogi
 // @match        https://adult.contents.fc2.com/article/*/
-// @match        https://www.dmm.co.jp/digital/video*/*
+// @match        https://video.dmm.co.jp/*
 // @match        http://idolerotic.net/*
 // @match        https://idolerotic.net/*
 // @match        https://www.mgstage.com/product/product_detail/*
@@ -21,12 +21,13 @@
     const makeHitomiUrl = query => `https://hitomi.la/search.html?${query}`;
 
     function extractMediaIdFromDmm() {
-        const cidMatch = location.href.match(/.*\/cid=([^\/?&]+)/);
-        if (!cidMatch) return null;
-
-        const [, rawId] = cidMatch;
-        const idMatch = rawId.match(/([a-zA-Z]+)(\d+)/);
-        if (!idMatch) return null;
+        const url = new URL(location.href);
+        const rawid = url.searchParams.get("id");
+        const idMatch = rawid.match(/([a-zA-Z]+)(\d+)/);
+        if (!idMatch) {
+            console.warn("Could not extract media ID from DMM URL");
+            return null;
+        }
 
         const [, prefix, digits] = idMatch;
         const padded = String(Number(digits)).padStart(3, '0');
@@ -53,12 +54,12 @@
                 urlBuilder: makeAVUrl
             };
         },
-        "www.dmm.co.jp": () => {
+        "video.dmm.co.jp": () => {
             const mediaId = extractMediaIdFromDmm();
             if (!mediaId) return null;
             return {
                 mediaId,
-                insertSelector: "div.hreview",
+                insertSelector: "div:has(>h1)",
                 urlBuilder: makeAVUrl
             };
         },
@@ -85,7 +86,10 @@
 
     function insertQueryLink(label, selector, url) {
         const container = document.querySelector(selector);
-        if (!container) return;
+        if (!container) {
+            console.warn(`Could not find container with selector: ${selector}`);
+            return;
+        }
 
         const link = document.createElement('a');
         link.textContent = `💖 ${label}`;
@@ -96,13 +100,45 @@
         container.appendChild(link);
     }
 
+    function waitForElement(selector, callback, timeout = 5000) {
+        const element = document.querySelector(selector);
+        if (element) {
+            callback(element);
+            return;
+        }
+
+        const observer = new MutationObserver((mutations, obs) => {
+            const el = document.querySelector(selector);
+            if (el) {
+                obs.disconnect();
+                callback(el);
+            }
+        });
+
+        observer.observe(document.body, { childList: true, subtree: true });
+
+        if (timeout) {
+            setTimeout(() => {
+                observer.disconnect();
+            }, timeout);
+        }
+    }
+
     const handler = siteHandlers[location.host];
-    if (!handler) return;
+    if (!handler) {
+        console.warn(`No handler for host: ${location.host}`);
+        return;
+    }
 
     const result = handler();
-    if (!result || !result.mediaId) return;
+    if (!result || !result.mediaId) {
+        console.warn(`Could not extract media ID on host: ${location.host}`);
+        return;
+    }
 
     const { mediaId, insertSelector, urlBuilder } = result;
     const queryUrl = urlBuilder(mediaId);
-    insertQueryLink(mediaId, insertSelector, queryUrl);
+    waitForElement(insertSelector, (container) => {
+        insertQueryLink(mediaId, insertSelector, queryUrl);
+    });
 })();
