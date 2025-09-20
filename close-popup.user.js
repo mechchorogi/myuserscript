@@ -16,7 +16,8 @@
     // サイトごとのポップアップ要素のCSSセレクタ定義
     const popupSelectorsByHost = {
         'www.dmm.co.jp': [
-            'div#campaign-popup-close'
+            'div#campaign-popup-close',
+            'button.w-fit'
         ],
         'www.amazon.co.jp': [
             'span#black-curtain-yes-button a'
