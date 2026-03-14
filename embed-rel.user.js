@@ -13,16 +13,7 @@
 
     const handlers = {
         'hitomi.la': {
-            selectors: [
-                'div.container',
-                'div.page-container > ul'
-            ],
-
-            getTargets() {
-                return this.selectors
-                    .map(selector => document.querySelector(selector))
-                    .filter(Boolean); // null を除外
-            },
+            selector: 'div.page-container > ul',
 
             embedRelAttributes() {
                 const pager = document.querySelector('div.page-container > ul');
@@ -45,29 +36,21 @@
                 }
             }
         },
-        'iwara.tv': {
-            selectors: [
-                '.pagination'
-            ],
-
-            getTargets() {
-                return this.selectors
-                    .map(selector => document.querySelector(selector))
-                    .filter(Boolean);
-            },
+        'www.iwara.tv': {
+            selector: '.pagination',
 
             embedRelAttributes() {
                 // prev: .pagination li svg.fa-angle-left
                 // next: .pagination li svg.fa-angle-right
                 const prevSvg = document.querySelector('.pagination li svg.fa-angle-left');
                 if (prevSvg) {
-                    const prevA = prevSvg.closest('a');
-                    if (prevA) prevA.rel = 'prev';
+                    const prevLi = prevSvg.closest('li');
+                    if (prevLi) prevLi.setAttribute('rel', 'prev');
                 }
                 const nextSvg = document.querySelector('.pagination li svg.fa-angle-right');
                 if (nextSvg) {
-                    const nextA = nextSvg.closest('a');
-                    if (nextA) nextA.rel = 'next';
+                    const nextLi = nextSvg.closest('li');
+                    if (nextLi) nextLi.setAttribute('rel', 'next');
                 }
             }
         }
@@ -77,16 +60,29 @@
     const handler = handlers[host];
     if (!handler) return;
 
-    // 初回実行
-    handler.embedRelAttributes();
-
-    // DOM変化を監視して再付与（例: Ajax等で再描画された場合）
+    // 目的の要素が現れるまでbody全体を監視し、見つかったら本来の監視に切り替える
     const observer = new MutationObserver(() => {
         handler.embedRelAttributes();
         console.log('[EmbedRel] rel=prev/next embedded');
     });
 
-    handler.getTargets().forEach(target => {
-        observer.observe(target, { childList: true, subtree: true });
+    function tryStartTargetObserver() {
+        const target = document.querySelector(handler.selector);
+        if (target) {
+            observer.observe(target, { childList: true, subtree: true });
+            handler.embedRelAttributes();
+            initialObserver.disconnect();
+            return true;
+        }
+        return false;
+    }
+
+    // body全体を一時的に監視
+    const initialObserver = new MutationObserver(() => {
+        tryStartTargetObserver();
     });
+    initialObserver.observe(document.body, { childList: true, subtree: true });
+
+    // ページロード直後にも一度チェック
+    tryStartTargetObserver();
 })();
