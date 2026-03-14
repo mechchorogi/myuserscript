@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Embed rel attributes
 // @namespace    http://tampermonkey.net/
-// @version      1.0.0
+// @version      1.1.0
 // @description  Add rel=prev/next to pager links (e.g. for hitomi.la)
 // @author       mechchorogi
 // @match        http*://*/*
