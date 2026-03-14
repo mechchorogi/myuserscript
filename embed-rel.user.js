@@ -44,6 +44,32 @@
                     if (nextLink) nextLink.rel = 'next';
                 }
             }
+        },
+        'iwara.tv': {
+            selectors: [
+                '.pagination'
+            ],
+
+            getTargets() {
+                return this.selectors
+                    .map(selector => document.querySelector(selector))
+                    .filter(Boolean);
+            },
+
+            embedRelAttributes() {
+                // prev: .pagination li svg.fa-angle-left
+                // next: .pagination li svg.fa-angle-right
+                const prevSvg = document.querySelector('.pagination li svg.fa-angle-left');
+                if (prevSvg) {
+                    const prevA = prevSvg.closest('a');
+                    if (prevA) prevA.rel = 'prev';
+                }
+                const nextSvg = document.querySelector('.pagination li svg.fa-angle-right');
+                if (nextSvg) {
+                    const nextA = nextSvg.closest('a');
+                    if (nextA) nextA.rel = 'next';
+                }
+            }
         }
     };
 
