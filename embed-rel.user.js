@@ -17,23 +17,33 @@
 
             embedRelAttributes() {
                 const pager = document.querySelector('div.page-container > ul');
-                if (!pager) return;
+                if (!pager) return false;
 
-                const pageItems = Array.from(pager.querySelectorAll('li'));
-                const current = pageItems.find(
+                const pages = Array.from(pager.querySelectorAll('li'));
+                const current = pages.find(
                     item => item.childElementCount === 0 && item.innerText.trim() !== '...'
                 );
-                if (!current) return;
+                if (!current) return false;
+
+                let success = false;
 
                 if (current.previousElementSibling) {
                     const prevLink = current.previousElementSibling.querySelector('a');
-                    if (prevLink) prevLink.rel = 'prev';
+                    if (prevLink) {
+                        prevLink.rel = 'prev';
+                        success = true;
+                    }
                 }
 
                 if (current.nextElementSibling) {
                     const nextLink = current.nextElementSibling.querySelector('a');
-                    if (nextLink) nextLink.rel = 'next';
+                    if (nextLink) {
+                        nextLink.rel = 'next';
+                        success = true;
+                    }
                 }
+
+                return success;
             }
         },
         'www.iwara.tv': {
@@ -42,16 +52,25 @@
             embedRelAttributes() {
                 // prev: .pagination li svg.fa-angle-left
                 // next: .pagination li svg.fa-angle-right
+                let success = false;
                 const prevSvg = document.querySelector('.pagination li svg.fa-angle-left');
                 if (prevSvg) {
                     const prevLi = prevSvg.closest('li');
-                    if (prevLi) prevLi.setAttribute('rel', 'prev');
+                    if (prevLi) {
+                        prevLi.setAttribute('rel', 'prev');
+                        success = true;
+                    }
                 }
                 const nextSvg = document.querySelector('.pagination li svg.fa-angle-right');
                 if (nextSvg) {
                     const nextLi = nextSvg.closest('li');
-                    if (nextLi) nextLi.setAttribute('rel', 'next');
+                    if (nextLi) {
+                        nextLi.setAttribute('rel', 'next');
+                        success = true;
+                    }
                 }
+
+                return success;
             }
         }
     };
@@ -62,15 +81,20 @@
 
     // 目的の要素が現れるまでbody全体を監視し、見つかったら本来の監視に切り替える
     const observer = new MutationObserver(() => {
-        handler.embedRelAttributes();
-        console.log('[EmbedRel] rel=prev/next embedded');
+        const ok = handler.embedRelAttributes();
+        if (ok) {
+            console.log('[EmbedRel] rel=prev/next embedded');
+        }
     });
 
     function tryStartTargetObserver() {
         const target = document.querySelector(handler.selector);
         if (target) {
             observer.observe(target, { childList: true, subtree: true });
-            handler.embedRelAttributes();
+            const ok = handler.embedRelAttributes();
+            if (ok) {
+                console.log('[EmbedRel] rel=prev/next embedded');
+            }
             initialObserver.disconnect();
             return true;
         }
