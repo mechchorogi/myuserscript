@@ -45,10 +45,13 @@ class Card {
         return [];
     }
 
-    setFiltered(filtered) {
+    setFiltered(matches) {
         const cover = this.elem.querySelector('div.card-cover');
         if (!cover) return;
-        if (filtered) {
+
+        this.elem.querySelectorAll('.v2ph-match').forEach(el => el.classList.remove('v2ph-match'));
+
+        if (matches.matched) {
             cover.classList.add('v2ph-filtered');
             if (!cover.querySelector('.v2ph-overlay')) {
                 const overlay = document.createElement('div');
@@ -56,9 +59,33 @@ class Card {
                 overlay.textContent = 'Filtered!';
                 cover.appendChild(overlay);
             }
+            this.#applyHighlights(matches);
         } else {
             cover.classList.remove('v2ph-filtered');
             cover.querySelector('.v2ph-overlay')?.remove();
+        }
+    }
+
+    #applyHighlights(matches) {
+        if (matches.titleMatched) {
+            this.elem.querySelector('.media-meta h6')?.classList.add('v2ph-match');
+        }
+        const dl = this.elem.querySelector('div.media-meta dl');
+        if (!dl) return;
+        if (matches.models.length > 0) this.#highlightDd(dl, 'モデル', matches.models);
+        if (matches.tags.length > 0)   this.#highlightDd(dl, 'タグ',   matches.tags);
+    }
+
+    #highlightDd(dl, label, matchedValues) {
+        const lcMatched = matchedValues.map(v => v.toLowerCase());
+        for (const dt of dl.querySelectorAll('dt')) {
+            if (dt.textContent.trim() !== label) continue;
+            const dd = dt.nextElementSibling;
+            if (!dd) continue;
+            for (const a of dd.querySelectorAll('a')) {
+                const vals = a.textContent.split(',').map(v => v.trim().toLowerCase());
+                if (vals.some(v => lcMatched.includes(v))) a.classList.add('v2ph-match');
+            }
         }
     }
 }
@@ -67,7 +94,12 @@ async function loadBlacklist() {
     const data = {};
     for (const k of KEYS) {
         const value = await GM.getValue(`blacklist_${k}`, '');
-        data[k] = value.split('\n').map(s => s.trim()).filter(Boolean);
+        if (k === 'title') {
+            // Preserve internal/leading/trailing spaces for regex patterns; only drop blank lines
+            data[k] = value.split(/\r?\n/).filter(s => s.trim() !== '');
+        } else {
+            data[k] = value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+        }
     }
     return data;
 }
@@ -79,33 +111,35 @@ async function saveBlacklistFromInputs(container) {
     }
 }
 
-function isBlacklisted(card, blackList) {
+function getMatches(card, blackList) {
     const lcModels = card.models.map(x => x.toLowerCase());
-    if (blackList.model.some(m => lcModels.includes(m.toLowerCase()))) return true;
+    const models = blackList.model.filter(m => lcModels.includes(m.toLowerCase()));
 
     const lcTags = card.tags.map(x => x.toLowerCase());
-    if (blackList.tag.some(t => lcTags.includes(t.toLowerCase()))) return true;
+    const tags = blackList.tag.filter(t => lcTags.includes(t.toLowerCase()));
 
-    if (blackList.title.some(t => {
+    const titleMatched = blackList.title.some(t => {
         try { return new RegExp(t, 'i').test(card.title); }
         catch { return false; }
-    })) return true;
+    });
 
-    return false;
+    return { matched: models.length > 0 || tags.length > 0 || titleMatched, models, tags, titleMatched };
 }
 
 function applyFilter(blackList) {
     if (!filterEnabled) return;
     document.querySelectorAll('main#content .card').forEach(elem => {
         const card = new Card(elem);
-        card.setFiltered(isBlacklisted(card, blackList));
+        card.setFiltered(getMatches(card, blackList));
     });
 }
 
 function clearFilter() {
     document.querySelectorAll('main#content .card-cover.v2ph-filtered').forEach(el => {
+        el.querySelector('.v2ph-overlay')?.remove();
         el.classList.remove('v2ph-filtered');
     });
+    document.querySelectorAll('main#content .v2ph-match').forEach(el => el.classList.remove('v2ph-match'));
 }
 
 async function blacklistClickHandler(e) {
@@ -348,6 +382,10 @@ style.textContent = `
     justify-content: center;
     z-index: 9998;
     pointer-events: none;
+  }
+  .v2ph-match {
+    background-color: rgba(220, 50, 50, 0.18);
+    border-radius: 3px;
   }
 `;
 document.head.appendChild(style);
