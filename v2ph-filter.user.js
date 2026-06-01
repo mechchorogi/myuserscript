@@ -104,12 +104,6 @@ async function loadBlacklist() {
     return data;
 }
 
-async function saveBlacklistFromInputs(container) {
-    for (const k of KEYS) {
-        const text = container.querySelector(`#v2ph-blacklist-input-${k}`).value;
-        await GM.setValue(`blacklist_${k}`, text);
-    }
-}
 
 function getMatches(card, blackList) {
     const lcModels = card.models.map(x => x.toLowerCase());
@@ -197,7 +191,7 @@ async function createUI() {
 
     const labelText = { title: 'Title (regex)', model: 'Model', tag: 'Tag' };
     const form = document.createElement('div');
-    const state = { dirty: false };
+    let saveTimer = null;
 
     for (const k of KEYS) {
         const label = document.createElement('label');
@@ -210,24 +204,20 @@ async function createUI() {
         textarea.rows = 4;
         textarea.style.width = '100%';
         textarea.addEventListener('input', () => {
-            state.dirty = true;
-            saveBtn.disabled = false;
+            clearTimeout(saveTimer);
+            saveTimer = setTimeout(async () => {
+                for (const key of KEYS) {
+                    const ta = panel.querySelector(`#v2ph-blacklist-input-${key}`);
+                    if (ta) await GM.setValue(`blacklist_${key}`, ta.value);
+                }
+                const blackList = await loadBlacklist();
+                applyFilter(blackList);
+            }, 400);
         });
 
         form.appendChild(label);
         form.appendChild(textarea);
     }
-
-    const saveBtn = document.createElement('button');
-    saveBtn.textContent = 'Save';
-    saveBtn.disabled = true;
-    saveBtn.addEventListener('click', async () => {
-        await saveBlacklistFromInputs(panel);
-        const blackList = await loadBlacklist();
-        applyFilter(blackList);
-        saveBtn.disabled = true;
-        state.dirty = false;
-    });
 
     const markModeBtn = document.createElement('button');
     markModeBtn.textContent = '🖊️ Blacklist Mode';
@@ -311,10 +301,6 @@ async function createUI() {
         gap:           '8px'
     });
 
-    const row1 = document.createElement('div');
-    row1.style.cssText = 'display:flex;gap:6px';
-    row1.appendChild(saveBtn);
-
     const row2 = document.createElement('div');
     row2.appendChild(markModeBtn);
 
@@ -330,7 +316,6 @@ async function createUI() {
     row4.appendChild(toggleLabel);
     row4.appendChild(toggleCheckbox);
 
-    buttonRow.appendChild(row1);
     buttonRow.appendChild(row2);
     buttonRow.appendChild(row3);
     buttonRow.appendChild(row4);
