@@ -53,15 +53,22 @@ class Card {
 
         if (matches.matched) {
             cover.classList.add('v2ph-filtered');
+            cover.classList.remove('v2ph-revealed');
             if (!cover.querySelector('.v2ph-overlay')) {
                 const overlay = document.createElement('div');
                 overlay.className = 'v2ph-overlay';
                 overlay.textContent = 'Filtered!';
+                overlay.addEventListener('click', e => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    cover.classList.toggle('v2ph-revealed');
+                });
                 cover.appendChild(overlay);
             }
             this.#applyHighlights(matches);
         } else {
             cover.classList.remove('v2ph-filtered');
+            cover.classList.remove('v2ph-revealed');
             cover.querySelector('.v2ph-overlay')?.remove();
         }
     }
@@ -132,6 +139,7 @@ function clearFilter() {
     document.querySelectorAll('main#content .card-cover.v2ph-filtered').forEach(el => {
         el.querySelector('.v2ph-overlay')?.remove();
         el.classList.remove('v2ph-filtered');
+        el.classList.remove('v2ph-revealed');
     });
     document.querySelectorAll('main#content .v2ph-match').forEach(el => el.classList.remove('v2ph-match'));
 }
@@ -366,7 +374,13 @@ style.textContent = `
     align-items: center;
     justify-content: center;
     z-index: 9998;
-    pointer-events: none;
+    cursor: pointer;
+  }
+  .v2ph-filtered.v2ph-revealed > *:not(.v2ph-overlay) {
+    visibility: visible;
+  }
+  .v2ph-filtered.v2ph-revealed .v2ph-overlay {
+    display: none;
   }
   .v2ph-match {
     background-color: rgba(220, 50, 50, 0.18);
