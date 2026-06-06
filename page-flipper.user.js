@@ -1,53 +1,50 @@
 // ==UserScript==
 // @name         Page Flipper
 // @namespace    http://tampermonkey.net/
-// @version      1.3.0
-// @description  Use arrow keys to flip pages on supported sites
-// @match        https://hitomi.la/*
-// @match        https://tktube.com/*
-// @match        https://jp.pictoa.com/*
+// @version      2.0.0
+// @description  Use arrow keys to flip pages via rel=next/prev links on any site
+// @match        http://*/*
+// @match        https://*/*
 // @grant        none
 // ==/UserScript==
 
 (function () {
     'use strict';
 
-    const siteSettings = {
-        'hitomi.la': {
-            nextSelector: 'a[rel=next]',
-            prevSelector: 'a[rel=prev]',
-            nextKeys: ['ArrowRight'],
-            prevKeys: ['ArrowLeft']
-        },
-        'tktube.com': {
-            nextSelector: 'div.pagination-holder > ul > li.next a',
-            prevSelector: 'div.pagination-holder > ul > li.prev a',
-            nextKeys: ['ArrowRight'],
-            prevKeys: ['ArrowLeft']
-        },
-        'jp.pictoa.com': {
-            nextSelector: 'a#next',
-            prevSelector: 'a#prev',
-            nextKeys: ['ArrowRight'],
-            prevKeys: ['ArrowLeft']
-        },
-    };
-
-    const currentHost = location.hostname;
-    const settings = siteSettings[currentHost];
-    if (!settings) return;
-
-    function matchKey(event, keyDef) {
-        return event.code === keyDef;
-    }
-
     function handleKeyDown(event) {
-        if (settings.nextKeys.some(k => matchKey(event, k))) {
-            document.querySelector(settings.nextSelector)?.click();
-        } else if (settings.prevKeys.some(k => matchKey(event, k))) {
-            document.querySelector(settings.prevSelector)?.click();
+        if (event.code === 'ArrowRight') {
+            clickElem(nextElem);
+        } else if (event.code === 'ArrowLeft') {
+            clickElem(prevElem);
         }
     }
+
+    let nextElem = null;
+    let prevElem = null;
+
+    function updateLinks() {
+        // a[rel=next]優先、なければ他の[rel=next]
+        nextElem = document.querySelector('a[rel="next"]') || document.querySelector('[rel="next"]');
+        prevElem = document.querySelector('a[rel="prev"]') || document.querySelector('[rel="prev"]');
+    }
+
+    function clickElem(elem) {
+        if (!elem) return;
+        if (typeof elem.click === 'function') {
+            elem.click();
+        } else {
+            // aタグでなければ親aを探してクリック
+            const a = elem.closest('a');
+            if (a && typeof a.click === 'function') a.click();
+        }
+    }
+
+    // 初期キャッシュ
+    updateLinks();
+
+    // DOM変化時にキャッシュを更新
+    const observer = new MutationObserver(updateLinks);
+    observer.observe(document.body, { childList: true, subtree: true });
 
     window.addEventListener('keydown', handleKeyDown, true);
 })();
