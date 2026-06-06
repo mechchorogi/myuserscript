@@ -50,12 +50,12 @@
         'www.iwara.tv': defineHandler('.pagination', function () {
             let success = false;
 
-            function setRelByIcon(iconSelector, rel) {
-                const icon = document.querySelector(`.pagination .pagination__items > li ${iconSelector}`);
+            function setRelByIcon(pager, iconSelector, rel) {
+                const icon = pager.querySelector(`.pagination__items > li ${iconSelector}`);
                 const item = icon?.closest('.pagination__item');
                 if (
                     item?.parentElement?.matches('.pagination__items') &&
-                    item.closest('.pagination') &&
+                    item.closest('.pagination') === pager &&
                     !item.classList.contains('pagination__item--disabled')
                 ) {
                     icon.removeAttribute('rel');
@@ -65,8 +65,13 @@
                 return false;
             }
 
-            success = setRelByIcon('svg.fa-angle-left', 'prev') || success;
-            success = setRelByIcon('svg.fa-angle-right', 'next') || success;
+            document.querySelectorAll('.pagination').forEach(pager => {
+                pager.querySelectorAll('[rel="prev"], [rel="next"]').forEach(item => {
+                    item.removeAttribute('rel');
+                });
+                success = setRelByIcon(pager, 'svg.fa-angle-left', 'prev') || success;
+                success = setRelByIcon(pager, 'svg.fa-angle-right', 'next') || success;
+            });
 
             return success;
         })
@@ -76,34 +81,70 @@
     const handler = handlers[host];
     if (!handler) return;
 
-    // Watch the whole body until the target element appears, then switch to observing it.
-    const observer = new MutationObserver(() => {
+    function embedRel() {
         const ok = handler.embed();
         if (ok) {
             console.log('[EmbedRel] rel=prev/next embedded');
         }
-    });
-
-    function tryStartTargetObserver() {
-        const target = document.querySelector(handler.selector);
-        if (target) {
-            observer.observe(target, { childList: true, subtree: true });
-            const ok = handler.embed();
-            if (ok) {
-                console.log('[EmbedRel] rel=prev/next embedded');
-            }
-            initialObserver.disconnect();
-            return true;
-        }
-        return false;
     }
 
-    // Temporarily observe the whole body.
-    const initialObserver = new MutationObserver(() => {
-        tryStartTargetObserver();
+    let observedTarget = null;
+    let timerId = null;
+
+    const targetObserver = new MutationObserver(() => {
+        scheduleEmbedRel();
     });
-    initialObserver.observe(document.body, { childList: true, subtree: true });
+
+    function observeTarget() {
+        const target = document.querySelector(handler.selector);
+        if (!target || target === observedTarget) return false;
+
+        targetObserver.disconnect();
+        targetObserver.observe(target, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['class'],
+        });
+        observedTarget = target;
+        return true;
+    }
+
+    function run() {
+        observeTarget();
+        embedRel();
+    }
+
+    function scheduleEmbedRel() {
+        clearTimeout(timerId);
+        timerId = setTimeout(() => {
+            run();
+            setTimeout(run, 300);
+            setTimeout(run, 1000);
+        }, 100);
+    }
+
+    // Keep watching the body because SPA navigation may replace or rerender the target element.
+    const bodyObserver = new MutationObserver(() => {
+        scheduleEmbedRel();
+    });
+    bodyObserver.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['class'],
+    });
+
+    window.addEventListener('popstate', scheduleEmbedRel);
+    ['pushState', 'replaceState'].forEach(method => {
+        const original = history[method];
+        history[method] = function () {
+            const result = original.apply(this, arguments);
+            scheduleEmbedRel();
+            return result;
+        };
+    });
 
     // Check once immediately after page load.
-    tryStartTargetObserver();
+    run();
 })();
