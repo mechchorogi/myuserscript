@@ -13,8 +13,10 @@
 
     function handleKeyDown(event) {
         if (event.code === 'ArrowRight') {
+            updateLinks();
             clickElem(nextElem);
         } else if (event.code === 'ArrowLeft') {
+            updateLinks();
             clickElem(prevElem);
         }
     }
@@ -48,7 +50,12 @@
 
     // Update the cache when the DOM changes.
     const observer = new MutationObserver(updateLinks);
-    observer.observe(document.body, { childList: true, subtree: true });
+    observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['rel'],
+    });
 
     window.addEventListener('keydown', handleKeyDown, true);
 })();
