@@ -12,12 +12,8 @@
 (function () {
     'use strict';
 
-    function defineHandler(selector, embed) {
-        return { selector, embed };
-    }
-
     const handlers = {
-        'hitomi.la': defineHandler('div.page-container > ul', function () {
+        'hitomi.la': function () {
             const pager = document.querySelector('div.page-container > ul');
             if (!pager) return false;
 
@@ -46,19 +42,14 @@
             }
 
             return success;
-        }),
-        'www.iwara.tv': defineHandler('.pagination', function () {
+        },
+        'www.iwara.tv': function () {
             let success = false;
 
             function setRelByIcon(pager, iconSelector, rel) {
                 const icon = pager.querySelector(`.pagination__items > li ${iconSelector}`);
                 const item = icon?.closest('.pagination__item');
-                if (
-                    item?.parentElement?.matches('.pagination__items') &&
-                    item.closest('.pagination') === pager &&
-                    !item.classList.contains('pagination__item--disabled')
-                ) {
-                    icon.removeAttribute('rel');
+                if (item && !item.classList.contains('pagination__item--disabled')) {
                     item.setAttribute('rel', rel);
                     return true;
                 }
@@ -74,7 +65,7 @@
             });
 
             return success;
-        })
+        }
     };
 
     const host = location.hostname;
@@ -82,45 +73,20 @@
     if (!handler) return;
 
     function embedRel() {
-        const ok = handler.embed();
+        const ok = handler();
         if (ok) {
             console.log('[EmbedRel] rel=prev/next embedded');
         }
     }
 
-    let observedTarget = null;
     let timerId = null;
-
-    const targetObserver = new MutationObserver(() => {
-        scheduleEmbedRel();
-    });
-
-    function observeTarget() {
-        const target = document.querySelector(handler.selector);
-        if (!target || target === observedTarget) return false;
-
-        targetObserver.disconnect();
-        targetObserver.observe(target, {
-            childList: true,
-            subtree: true,
-            attributes: true,
-            attributeFilter: ['class'],
-        });
-        observedTarget = target;
-        return true;
-    }
-
-    function run() {
-        observeTarget();
-        embedRel();
-    }
 
     function scheduleEmbedRel() {
         clearTimeout(timerId);
         timerId = setTimeout(() => {
-            run();
-            setTimeout(run, 300);
-            setTimeout(run, 1000);
+            embedRel();
+            setTimeout(embedRel, 300);
+            setTimeout(embedRel, 1000);
         }, 100);
     }
 
@@ -146,5 +112,5 @@
     });
 
     // Check once immediately after page load.
-    run();
+    embedRel();
 })();
