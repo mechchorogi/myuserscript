@@ -1,0 +1,25 @@
+{
+    "github.copilot.chat.commitMessageGeneration.instructions": [
+        {
+            "text": "Write commit messages in English."
+        },
+        {
+            "text": "Use this format when details are needed: first line is the title, second line is blank, and the third line onward contains the details."
+        },
+        {
+            "text": "If the change can be explained clearly by the title alone, write only the title line."
+        },
+        {
+            "text": "Keep the title line within 80 characters."
+        },
+        {
+            "text": "Start the title line with the changed file name in square brackets, for example: [samplescript.user.js] Fix sample behavior."
+        },
+        {
+            "text": "Use a concise imperative verb in the title, such as Add, Fix, Update, Remove, or Refactor."
+        },
+        {
+            "text": "Use the details section only to explain meaningful context, behavioral changes, or reasons that are not obvious from the title."
+        }
+    ]
+}
