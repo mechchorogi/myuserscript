@@ -48,23 +48,21 @@
             return success;
         }),
         'www.iwara.tv': defineHandler('.pagination', function () {
-            // prev: .pagination li svg.fa-angle-left
-            // next: .pagination li svg.fa-angle-right
             let success = false;
-            const prevSvg = document.querySelector('.pagination li svg.fa-angle-left');
-            if (prevSvg) {
-                if (prevSvg) {
-                    prevSvg.setAttribute('rel', 'prev');
-                    success = true;
+
+            function setRelByIcon(iconSelector, rel) {
+                const icon = document.querySelector(`.pagination > li ${iconSelector}`);
+                const item = icon?.closest('li');
+                if (item?.parentElement?.matches('.pagination')) {
+                    icon.removeAttribute('rel');
+                    item.setAttribute('rel', rel);
+                    return true;
                 }
+                return false;
             }
-            const nextSvg = document.querySelector('.pagination li svg.fa-angle-right');
-            if (nextSvg) {
-                if (nextSvg) {
-                    nextSvg.setAttribute('rel', 'next');
-                    success = true;
-                }
-            }
+
+            success = setRelByIcon('svg.fa-angle-left', 'prev') || success;
+            success = setRelByIcon('svg.fa-angle-right', 'next') || success;
 
             return success;
         })
