@@ -51,9 +51,13 @@
             let success = false;
 
             function setRelByIcon(iconSelector, rel) {
-                const icon = document.querySelector(`.pagination > li ${iconSelector}`);
-                const item = icon?.closest('li');
-                if (item?.parentElement?.matches('.pagination')) {
+                const icon = document.querySelector(`.pagination .pagination__items > li ${iconSelector}`);
+                const item = icon?.closest('.pagination__item');
+                if (
+                    item?.parentElement?.matches('.pagination__items') &&
+                    item.closest('.pagination') &&
+                    !item.classList.contains('pagination__item--disabled')
+                ) {
                     icon.removeAttribute('rel');
                     item.setAttribute('rel', rel);
                     return true;
