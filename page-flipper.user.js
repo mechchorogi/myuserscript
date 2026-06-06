@@ -34,13 +34,13 @@
 
     function clickElem(elem) {
         if (!elem) return;
+
         if (typeof elem.click === 'function') {
             elem.click();
-        } else {
-            // If the element is not directly clickable, click its parent link.
-            const a = elem.closest('a');
-            if (a && typeof a.click === 'function') a.click();
+            return;
         }
+
+        elem.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
     }
 
     // Initial cache.
