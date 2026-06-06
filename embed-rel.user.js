@@ -72,7 +72,7 @@
     const handler = handlers[host];
     if (!handler) return;
 
-    // 目的の要素が現れるまでbody全体を監視し、見つかったら本来の監視に切り替える
+    // Watch the whole body until the target element appears, then switch to observing it.
     const observer = new MutationObserver(() => {
         const ok = handler.embed();
         if (ok) {
@@ -94,12 +94,12 @@
         return false;
     }
 
-    // body全体を一時的に監視
+    // Temporarily observe the whole body.
     const initialObserver = new MutationObserver(() => {
         tryStartTargetObserver();
     });
     initialObserver.observe(document.body, { childList: true, subtree: true });
 
-    // ページロード直後にも一度チェック
+    // Check once immediately after page load.
     tryStartTargetObserver();
 })();
