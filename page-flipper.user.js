@@ -26,6 +26,10 @@
         // a[rel=next]優先、なければ他の[rel=next]
         nextElem = document.querySelector('a[rel="next"]') || document.querySelector('[rel="next"]');
         prevElem = document.querySelector('a[rel="prev"]') || document.querySelector('[rel="prev"]');
+        console.log('[PageFlipper] Links updated', {
+            next: nextElem,
+            prev: prevElem,
+        });
     }
 
     function clickElem(elem) {
