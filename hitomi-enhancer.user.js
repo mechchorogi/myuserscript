@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Hitomi::Enhancer
+// @name         Hitomi::Redirect
 // @namespace    http://hitomi.la/
 // @version      1.0.0
-// @description  Enhance hitomi.la
+// @description  Redirect hitomi.la all/root pages to Japanese pages
 // @author       mechchorogi
 // @match        https://hitomi.la/
 // @match        https://hitomi.la/artist/*-all.html
