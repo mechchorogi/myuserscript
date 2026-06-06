@@ -23,7 +23,7 @@
     let prevElem = null;
 
     function updateLinks() {
-        // a[rel=next]優先、なければ他の[rel=next]
+        // Prefer a[rel=next], then fall back to any [rel=next].
         nextElem = document.querySelector('a[rel="next"]') || document.querySelector('[rel="next"]');
         prevElem = document.querySelector('a[rel="prev"]') || document.querySelector('[rel="prev"]');
         console.log('[PageFlipper] Links updated', {
@@ -37,16 +37,16 @@
         if (typeof elem.click === 'function') {
             elem.click();
         } else {
-            // aタグでなければ親aを探してクリック
+            // If the element is not directly clickable, click its parent link.
             const a = elem.closest('a');
             if (a && typeof a.click === 'function') a.click();
         }
     }
 
-    // 初期キャッシュ
+    // Initial cache.
     updateLinks();
 
-    // DOM変化時にキャッシュを更新
+    // Update the cache when the DOM changes.
     const observer = new MutationObserver(updateLinks);
     observer.observe(document.body, { childList: true, subtree: true });
 
