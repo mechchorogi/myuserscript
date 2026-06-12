@@ -2,7 +2,7 @@
 // @name         V2PH::Filter
 // @namespace    https://www.v2ph.com/
 // @version      1.0.0
-// @description  Filter v2ph albums by title keywords, model names, and tags
+// @description  Filter v2ph albums by title keywords, model names, companies, and tags
 // @author       mechchorogi
 // @match        https://www.v2ph.com/*
 // @icon         https://www.google.com/s2/favicons?domain=v2ph.com
@@ -13,7 +13,7 @@
 // @run-at       document-idle
 // ==/UserScript==
 
-const KEYS = ['title', 'model', 'tag'];
+const KEYS = ['title', 'model', 'company', 'tag'];
 let filterEnabled = true;
 
 class Card {
@@ -21,6 +21,7 @@ class Card {
         this.elem   = elem;
         this.title  = this.#getText('div.media-meta h6');
         this.models = this.#getMetaByLabel('モデル');
+        this.company = this.#getMetaByLabel('会社');
         this.tags   = this.#getMetaByLabel('タグ');
     }
 
@@ -80,6 +81,7 @@ class Card {
         const dl = this.elem.querySelector('div.media-meta dl');
         if (!dl) return;
         if (matches.models.length > 0) this.#highlightDd(dl, 'モデル', matches.models);
+        if (matches.company.length > 0) this.#highlightDd(dl, '会社', matches.company);
         if (matches.tags.length > 0)   this.#highlightDd(dl, 'タグ',   matches.tags);
     }
 
@@ -116,6 +118,9 @@ function getMatches(card, blackList) {
     const lcModels = card.models.map(x => x.toLowerCase());
     const models = blackList.model.filter(m => lcModels.includes(m.toLowerCase()));
 
+    const lcCompany = card.company.map(x => x.toLowerCase());
+    const company = blackList.company.filter(c => lcCompany.includes(c.toLowerCase()));
+
     const lcTags = card.tags.map(x => x.toLowerCase());
     const tags = blackList.tag.filter(t => lcTags.includes(t.toLowerCase()));
 
@@ -124,7 +129,13 @@ function getMatches(card, blackList) {
         catch { return false; }
     });
 
-    return { matched: models.length > 0 || tags.length > 0 || titleMatched, models, tags, titleMatched };
+    return {
+        matched: models.length > 0 || company.length > 0 || tags.length > 0 || titleMatched,
+        models,
+        company,
+        tags,
+        titleMatched
+    };
 }
 
 function applyFilter(blackList) {
@@ -161,7 +172,7 @@ async function blacklistClickHandler(e) {
     if (!dt) return;
 
     const label = dt.textContent.trim();
-    const key = label === 'モデル' ? 'model' : label === 'タグ' ? 'tag' : null;
+    const key = label === 'モデル' ? 'model' : label === '会社' ? 'company' : label === 'タグ' ? 'tag' : null;
     if (!key) return;
 
     const value = link.textContent.trim();
@@ -197,7 +208,7 @@ async function createUI() {
         zIndex:     '9999'
     });
 
-    const labelText = { title: 'Title (regex)', model: 'Model', tag: 'Tag' };
+    const labelText = { title: 'Title (regex)', model: 'Model', company: '会社', tag: 'Tag' };
     const form = document.createElement('div');
     let saveTimer = null;
 
