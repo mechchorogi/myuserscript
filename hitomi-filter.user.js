@@ -89,6 +89,48 @@ class Book {
         return filter ? arr.filter(filter) : arr;
     }
 
+    setFiltered(matches) {
+        this.elem.querySelectorAll('.hitomi-match').forEach(el => el.classList.remove('hitomi-match'));
+
+        if (matches.matched) {
+            this.fold();
+            this.#applyHighlights(matches);
+        } else {
+            this.folded = false;
+        }
+    }
+
+    #applyHighlights(matches) {
+        if (matches.titleMatched) {
+            this.elem.querySelector('h1.lillie')?.classList.add('hitomi-match');
+        }
+        if (matches.authors.length > 0) {
+            this.#highlightLinks('div.artist-list li a', matches.authors);
+        }
+        if (matches.tags.length > 0) {
+            this.#highlightLinks('td.relatedtags li a', matches.tags);
+        }
+        if (matches.series.length > 0) {
+            this.#highlightLinks('table.dj-desc tr:nth-of-type(1) td:nth-of-type(2) li a', matches.series);
+        }
+        if (matches.type.length > 0) {
+            this.#highlightLinks('table.dj-desc tr:nth-of-type(2) td:nth-of-type(2) a', matches.type);
+        }
+        if (matches.language.length > 0) {
+            this.#highlightLinks('table.dj-desc tr:nth-of-type(3) td:nth-of-type(2) a', matches.language);
+        }
+    }
+
+    #highlightLinks(selector, matchedValues) {
+        const lcMatched = matchedValues.map(v => v.toLowerCase());
+        for (const a of this.elem.querySelectorAll(selector)) {
+            if (lcMatched.includes(a.textContent.trim().toLowerCase())) {
+                a.classList.add('hitomi-match');
+                a.closest('li')?.classList.add('hitomi-match');
+            }
+        }
+    }
+
     set folded(state) {
         if (state) {
             this.fold();
@@ -99,6 +141,41 @@ class Book {
             });
         }
     }
+}
+
+function getMatches(book, blackList) {
+    const lcLanguage = book.language.toLowerCase();
+    const language = blackList.language.filter(x => lcLanguage === x.toLowerCase());
+
+    const lcAuthors = book.authors.map(a => a.toLowerCase());
+    const authors = blackList.author.filter(x => lcAuthors.includes(x.toLowerCase()));
+
+    const lcTags = book.tags.map(t => t.toLowerCase());
+    const tags = blackList.tag.filter(x => lcTags.includes(x.toLowerCase()));
+
+    const lcSeries = book.series.map(s => s.toLowerCase());
+    const series = blackList.series.filter(x => lcSeries.includes(x.toLowerCase()));
+
+    const titleMatched = blackList.title.some(x => {
+        try {
+            return new RegExp(x, 'i').test(book.title);
+        } catch (e) {
+            return false;
+        }
+    });
+
+    const lcType = book.type.toLowerCase();
+    const type = blackList.type.filter(x => lcType === x.toLowerCase());
+
+    return {
+        matched: language.length > 0 || authors.length > 0 || tags.length > 0 || series.length > 0 || titleMatched || type.length > 0,
+        language,
+        authors,
+        tags,
+        series,
+        titleMatched,
+        type
+    };
 }
 
 async function loadBlacklist() {
@@ -121,18 +198,7 @@ function filter(blackList) {
     if (!filterEnabled) return;
     document.querySelectorAll('body > div > div.gallery-content > div').forEach(elem => {
         const book = new Book(elem);
-        if (blackList.language.some(x => book.language.toLowerCase() === x.toLowerCase())) book.fold();
-        if (blackList.author.some(x => book.authors.map(a => a.toLowerCase()).includes(x.toLowerCase()))) book.fold();
-        if (blackList.tag.some(x => book.tags.map(t => t.toLowerCase()).includes(x.toLowerCase()))) book.fold();
-        if (blackList.series.some(x => book.series.map(s => s.toLowerCase()).includes(x.toLowerCase()))) book.fold();
-        if (blackList.title.some(x => {
-            try {
-                return new RegExp(x, 'i').test(book.title);
-            } catch (e) {
-                return false;
-            }
-        })) book.fold();
-        if (blackList.type.some(x => book.type.toLowerCase() === x.toLowerCase())) book.fold();
+        book.setFiltered(getMatches(book, blackList));
     });
 }
 
@@ -140,6 +206,9 @@ function clearFilter() {
     document.querySelectorAll('body > div > div.gallery-content > div').forEach(elem => {
         const book = new Book(elem);
         book.folded = false;
+    });
+    document.querySelectorAll('body > div > div.gallery-content .hitomi-match').forEach(el => {
+        el.classList.remove('hitomi-match');
     });
 }
 
@@ -372,12 +441,13 @@ function observeGallery(blackList) {
     if (!gallery) return;
 
     // Always observe and filter on every mutation
-    const observer = new MutationObserver(() => {
+    const observer = new MutationObserver(async () => {
         const hasContent = Array.from(gallery.children).some(
             c => !(c.id === 'loader-content')
         );
         if (hasContent) {
-            filter(blackList);
+            const currentBlackList = await loadBlacklist();
+            filter(currentBlackList);
         }
     });
     observer.observe(gallery, { childList: true });
@@ -397,6 +467,12 @@ style.textContent = `
   .hitomi-folded h1.lillie {
     padding-left: 0 !important;
     font-size: 0.9em !important;
+  }
+  .hitomi-match {
+    background-color: rgba(220, 50, 50, 0.2) !important;
+    background-image: none !important;
+    border-radius: 3px;
+    text-decoration: line-through !important;
   }
 `;
 document.head.appendChild(style);
