@@ -136,6 +136,18 @@ function filter(blackList) {
     });
 }
 
+function clearFilter() {
+    document.querySelectorAll('body > div > div.gallery-content > div').forEach(elem => {
+        const book = new Book(elem);
+        book.folded = false;
+    });
+}
+
+function refreshFilter(blackList) {
+    clearFilter();
+    filter(blackList);
+}
+
 async function blacklistClickHandler(e) {
     if (e.target.closest('#hitomi-filter-panel')) return;
 
@@ -165,7 +177,7 @@ async function blacklistClickHandler(e) {
             const input = document.querySelector(`#blacklist-input-${key}`);
             if (input) input.value = [...lines].join('\n');
             const blackList = await loadBlacklist();
-            filter(blackList);
+            refreshFilter(blackList);
             break;
         }
     }
@@ -192,7 +204,7 @@ async function createUI() {
     });
 
     const form = document.createElement('div');
-    const state = { dirty: false };
+    let saveTimer = null;
 
     for (let k of KEYS) {
         const label = document.createElement('label');
@@ -206,26 +218,17 @@ async function createUI() {
         textarea.rows = 4;
         textarea.style.width = '100%';
         textarea.addEventListener('input', () => {
-            state.dirty = true;
-            saveBtn.disabled = false;
+            clearTimeout(saveTimer);
+            saveTimer = setTimeout(async () => {
+                await saveBlacklistFromInputs(panel);
+                const blackList = await loadBlacklist();
+                refreshFilter(blackList);
+            }, 400);
         });
 
         form.appendChild(label);
         form.appendChild(textarea);
     }
-
-    const saveBtn = document.createElement('button');
-    saveBtn.id = 'hitomi-filter-save';
-    saveBtn.textContent = 'Save';
-    saveBtn.disabled = true;
-
-    saveBtn.addEventListener('click', async () => {
-        await saveBlacklistFromInputs(panel);
-        const blackList = await loadBlacklist();
-        filter(blackList);
-        saveBtn.disabled = true;
-        state.dirty = false;
-    });
 
     // Insert Export and Import buttons
     const exportBtn = document.createElement('button');
@@ -266,7 +269,7 @@ async function createUI() {
                     }
                 }
                 const blackList = await loadBlacklist();
-                filter(blackList);
+                refreshFilter(blackList);
             } catch (e) {
                 alert('Invalid file format');
             }
@@ -276,7 +279,7 @@ async function createUI() {
 
     panel.appendChild(form);
 
-    // Group Save, Blacklist Mode, and Export/Import buttons into three vertical rows
+    // Group Blacklist Mode and Export/Import buttons into two vertical rows
     const buttonRow = document.createElement('div');
     Object.assign(buttonRow.style, {
         marginTop: '10px',
@@ -284,13 +287,6 @@ async function createUI() {
         flexDirection: 'column',
         gap: '10px'
     });
-
-    const group1 = document.createElement('div');
-    Object.assign(group1.style, {
-        display: 'flex',
-        gap: '10px'
-    });
-    group1.appendChild(saveBtn);
 
     // Add the new "Blacklist Mode" toggle button
     const markModeBtn = document.createElement('button');
@@ -312,7 +308,6 @@ async function createUI() {
     group3.appendChild(exportBtn);
     group3.appendChild(importBtn);
 
-    buttonRow.appendChild(group1);
     buttonRow.appendChild(group2);
     buttonRow.appendChild(group3);
     panel.appendChild(buttonRow);
@@ -359,12 +354,9 @@ async function createUI() {
     toggleCheckbox.addEventListener('change', () => {
         filterEnabled = toggleCheckbox.checked;
         if (filterEnabled) {
-            loadBlacklist().then(filter);
+            loadBlacklist().then(refreshFilter);
         } else {
-            document.querySelectorAll('body > div > div.gallery-content > div').forEach(elem => {
-                const book = new Book(elem);
-                book.folded = false;
-            });
+            clearFilter();
         }
     });
 
