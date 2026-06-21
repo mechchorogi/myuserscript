@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         V2PH::Filter
 // @namespace    https://www.v2ph.com/
-// @version      1.1.0
+// @version      1.2.0
 // @description  Filter v2ph albums by title keywords, model names, companies, and tags
 // @author       mechchorogi
 // @match        https://www.v2ph.com/*
