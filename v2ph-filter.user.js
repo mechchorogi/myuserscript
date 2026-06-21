@@ -189,6 +189,24 @@ async function blacklistClickHandler(e) {
 }
 
 async function createUI() {
+    const launcher = document.createElement('button');
+    launcher.id = 'v2ph-filter-launcher';
+    launcher.textContent = 'Filter';
+    Object.assign(launcher.style, {
+        position: 'fixed',
+        top: '10px',
+        right: '10px',
+        zIndex: '9999',
+        padding: '8px 12px',
+        border: '1px solid rgba(0, 0, 0, 0.16)',
+        borderRadius: '8px',
+        background: 'rgba(255, 255, 255, 0.94)',
+        boxShadow: '0 4px 16px rgba(0, 0, 0, 0.12)',
+        cursor: 'pointer',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif',
+        fontSize: '14px'
+    });
+
     const panel = document.createElement('div');
     panel.id = 'v2ph-filter-panel';
     Object.assign(panel.style, {
@@ -207,6 +225,43 @@ async function createUI() {
         fontSize:   '14px',
         zIndex:     '9999'
     });
+
+    const setPanelOpen = open => {
+        panel.style.display = open ? 'block' : 'none';
+        launcher.style.display = open ? 'none' : 'block';
+    };
+
+    launcher.addEventListener('click', () => setPanelOpen(true));
+
+    const header = document.createElement('div');
+    Object.assign(header.style, {
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: '8px',
+        marginBottom: '8px'
+    });
+
+    const heading = document.createElement('strong');
+    heading.textContent = 'V2PH Filter';
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.textContent = '×';
+    Object.assign(closeBtn.style, {
+        width: '28px',
+        height: '28px',
+        border: '1px solid rgba(0, 0, 0, 0.14)',
+        borderRadius: '6px',
+        background: 'rgba(255, 255, 255, 0.9)',
+        cursor: 'pointer',
+        lineHeight: '1',
+        fontSize: '18px'
+    });
+    closeBtn.addEventListener('click', () => setPanelOpen(false));
+
+    header.appendChild(heading);
+    header.appendChild(closeBtn);
 
     const labelText = { title: 'Title (regex)', model: 'Model', company: '会社', tag: 'Tag' };
     const form = document.createElement('div');
@@ -339,6 +394,7 @@ async function createUI() {
     buttonRow.appendChild(row3);
     buttonRow.appendChild(row4);
 
+    panel.appendChild(header);
     panel.appendChild(form);
     panel.appendChild(buttonRow);
 
@@ -348,6 +404,8 @@ async function createUI() {
     }
 
     document.body.appendChild(panel);
+    document.body.appendChild(launcher);
+    setPanelOpen(true);
 }
 
 function observeContent() {
