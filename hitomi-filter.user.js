@@ -411,13 +411,22 @@ async function createUI() {
         marginTop: '16px',
         display: 'flex',
         alignItems: 'center',
-        justifyContent: 'space-between'
+        justifyContent: 'space-between',
+        gap: '10px'
     });
 
     const toggleLabel = document.createElement('label');
     toggleLabel.textContent = 'Filter Enabled';
+    toggleLabel.htmlFor = 'hitomi-filter-enabled-toggle';
+    Object.assign(toggleLabel.style, {
+        flex: '1',
+        cursor: 'pointer',
+        userSelect: 'none'
+    });
 
     const toggleCheckbox = document.createElement('input');
+    toggleCheckbox.id = 'hitomi-filter-enabled-toggle';
+    toggleCheckbox.className = 'hitomi-switch-input';
     toggleCheckbox.type = 'checkbox';
     toggleCheckbox.checked = filterEnabled;
     toggleCheckbox.addEventListener('change', () => {
@@ -429,8 +438,17 @@ async function createUI() {
         }
     });
 
+    const toggleSwitch = document.createElement('label');
+    toggleSwitch.className = 'hitomi-switch';
+    toggleSwitch.htmlFor = toggleCheckbox.id;
+
+    const toggleSlider = document.createElement('span');
+    toggleSlider.className = 'hitomi-switch-slider';
+
+    toggleSwitch.appendChild(toggleCheckbox);
+    toggleSwitch.appendChild(toggleSlider);
     toggleRow.appendChild(toggleLabel);
-    toggleRow.appendChild(toggleCheckbox);
+    toggleRow.appendChild(toggleSwitch);
     panel.appendChild(toggleRow);
 
     document.body.appendChild(panel);
@@ -473,6 +491,52 @@ style.textContent = `
     background-image: none !important;
     border-radius: 3px;
     text-decoration: line-through !important;
+  }
+  .hitomi-switch {
+    position: relative;
+    display: inline-flex;
+    flex: 0 0 auto;
+    width: 44px;
+    height: 24px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .hitomi-switch-input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+  .hitomi-switch-slider {
+    position: absolute;
+    inset: 0;
+    border-radius: 999px;
+    background: #c7ced8;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+    transition: background 160ms ease, box-shadow 160ms ease;
+  }
+  .hitomi-switch-slider::before {
+    content: "";
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.22);
+    transition: transform 160ms ease;
+  }
+  .hitomi-switch-input:checked + .hitomi-switch-slider {
+    background: #2563eb;
+    box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.18);
+  }
+  .hitomi-switch-input:checked + .hitomi-switch-slider::before {
+    transform: translateX(20px);
+  }
+  .hitomi-switch-input:focus-visible + .hitomi-switch-slider {
+    outline: 2px solid rgba(37, 99, 235, 0.35);
+    outline-offset: 3px;
   }
 `;
 document.head.appendChild(style);
