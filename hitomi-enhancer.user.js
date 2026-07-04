@@ -7,6 +7,7 @@
 // @match        https://hitomi.la/*
 // @icon         https://www.google.com/s2/favicons?domain=hitomi.la
 // @grant        GM.openInTab
+// @grant        window.close
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -113,9 +114,19 @@
         return true;
     }
 
+    function closeCurrentTab() {
+        window.close();
+    }
+
     function handleBookNavigationKeydown(e) {
-        if (!['j', 'k', 'r', 'v'].includes(e.key) || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+        if (!['c', 'j', 'k', 'r', 'v'].includes(e.key) || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
         if (isEditableTarget(e.target)) return;
+
+        if (e.key === 'c') {
+            e.preventDefault();
+            closeCurrentTab();
+            return;
+        }
 
         if (e.key === 'r') {
             if (clickReadOnlineButton()) {
