@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hitomi::Enhancer
 // @namespace    http://hitomi.la/
-// @version      1.0.0
+// @version      1.1.0
 // @description  Enhance hitomi.la with small layout and navigation tweaks
 // @author       mechchorogi
 // @match        https://hitomi.la/*
