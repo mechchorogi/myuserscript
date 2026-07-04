@@ -105,24 +105,9 @@
         return true;
     }
 
-    function clickDLButton() {
-        const dlButton = document.querySelector('a#dl-button');
-        if (!dlButton) return false;
-
-        dlButton.click();
-        return true;
-    }
-
     function handleBookNavigationKeydown(e) {
-        if (!['d', 'j', 'k', 'v'].includes(e.key) || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+        if (!['j', 'k', 'v'].includes(e.key) || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
         if (isEditableTarget(e.target)) return;
-
-        if (e.key === 'd') {
-            if (clickDLButton()) {
-                e.preventDefault();
-            }
-            return;
-        }
 
         if (e.key === 'v') {
             if (openFocusedBookInBackgroundTab()) {
