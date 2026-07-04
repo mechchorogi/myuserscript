@@ -2,7 +2,7 @@
 // @name         Page Flipper
 // @namespace    http://tampermonkey.net/
 // @version      2.1.2
-// @description  Use arrow keys to flip pages via rel=next/prev links on any site
+// @description  Use arrow keys and h/l to flip pages via rel=next/prev links on any site
 // @match        http://*/*
 // @match        https://*/*
 // @grant        none
@@ -12,11 +12,23 @@
     'use strict';
 
     function handleKeyDown(event) {
-        if (event.code === 'ArrowRight') {
-            clickRel('next');
-        } else if (event.code === 'ArrowLeft') {
-            clickRel('prev');
+        if (isEditableTarget(event.target) || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+
+        if (event.code === 'ArrowRight' || event.key === 'l') {
+            if (clickRel('next')) {
+                event.preventDefault();
+            }
+        } else if (event.code === 'ArrowLeft' || event.key === 'h') {
+            if (clickRel('prev')) {
+                event.preventDefault();
+            }
         }
+    }
+
+    function isEditableTarget(target) {
+        if (!(target instanceof Element)) return false;
+
+        return Boolean(target.closest('input, textarea, select') || target.isContentEditable);
     }
 
     function findRelElem(rel) {
@@ -24,13 +36,14 @@
     }
 
     function clickElem(elem) {
-        if (!elem) return;
+        if (!elem) return false;
 
         elem.click();
+        return true;
     }
 
     function clickRel(rel) {
-        clickElem(findRelElem(rel));
+        return clickElem(findRelElem(rel));
     }
 
     window.addEventListener('keydown', handleKeyDown, true);
