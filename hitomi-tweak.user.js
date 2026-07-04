@@ -18,6 +18,7 @@
 
     const blacklistKeys = ['author', 'language', 'series', 'tag', 'title', 'type'];
     const downloadHistoryKey = 'hitomi-tweak-download-history';
+    const foldedBookIdsKey = 'hitomi-tweak-folded-book-ids';
     const focusedBookClassName = 'hitomi-tweak-focused-book';
     const helpOverlayClassName = 'hitomi-tweak-help-overlay';
     const helpOverlayHiddenClassName = 'hitomi-tweak-help-overlay-hidden';
@@ -38,6 +39,7 @@
     let filterEnabled = true;
     let filterMarkModeButton = null;
     let focusedBook = null;
+    let foldedBookIds = new Set();
     let helpOverlay = null;
     let isHandlingDownload = false;
 
@@ -47,6 +49,31 @@
 
     function blacklistStorageKey(key) {
         return `hitomi-tweak-blacklist-${key}`;
+    }
+
+    function getBookIdFromElement(elem) {
+        const link = elem.querySelector(':scope > h1.lillie a[href], :scope > h1 a[href], :scope > a[href]');
+        if (!link) return null;
+
+        const pathname = new URL(link.getAttribute('href'), location.href).pathname;
+        const pathWithoutExtension = pathname.replace(/\.[^/.]+$/, '');
+        return pathWithoutExtension.match(/(\d+)$/)?.[1] || null;
+    }
+
+    async function loadFoldedBookIds() {
+        const value = await GM.getValue(foldedBookIdsKey, []);
+        if (Array.isArray(value)) {
+            foldedBookIds = new Set(value.map(String));
+            return;
+        }
+
+        if (value && typeof value === 'object') {
+            foldedBookIds = new Set(Object.entries(value).filter(([, folded]) => folded).map(([id]) => id));
+        }
+    }
+
+    function saveFoldedBookIds() {
+        GM.setValue(foldedBookIdsKey, [...foldedBookIds]).catch(() => {});
     }
 
     function isEditableTarget(target) {
@@ -204,6 +231,7 @@
     class FilterBook {
         constructor(elem) {
             this.elem = elem;
+            this.bookId = getBookIdFromElement(elem);
             this.title = this.#getText('h1.lillie');
             this.authors = this.#getList('div.artist-list li');
             this.series = this.#getList('table.dj-desc tr:nth-of-type(1) td:nth-of-type(2) li');
@@ -225,9 +253,9 @@
                         e.preventDefault();
                         e.stopPropagation();
                     }
-                    this.#unfold();
+                    this.setManualFolded(false);
                 } else {
-                    this.#fold();
+                    this.setManualFolded(true);
                 }
             });
 
@@ -237,10 +265,11 @@
             }
 
             this.elem.style.position = 'relative';
-            this.#unfold();
+            this.applySavedFoldState();
         }
 
         refresh() {
+            this.bookId = getBookIdFromElement(this.elem);
             this.title = this.#getText('h1.lillie');
             this.authors = this.#getList('div.artist-list li');
             this.series = this.#getList('table.dj-desc tr:nth-of-type(1) td:nth-of-type(2) li');
@@ -256,6 +285,22 @@
         fold() {
             if (this.#isFolded()) return;
             this.#fold();
+        }
+
+        setManualFolded(state) {
+            this.folded = state;
+
+            if (!this.bookId) return;
+            if (state) {
+                foldedBookIds.add(this.bookId);
+            } else {
+                foldedBookIds.delete(this.bookId);
+            }
+            saveFoldedBookIds();
+        }
+
+        applySavedFoldState() {
+            this.folded = Boolean(this.bookId && foldedBookIds.has(this.bookId));
         }
 
         #fold() {
@@ -289,7 +334,7 @@
                 this.fold();
                 this.#applyHighlights(matches);
             } else {
-                this.folded = false;
+                this.applySavedFoldState();
             }
         }
 
@@ -408,7 +453,7 @@
 
     function clearFilter() {
         document.querySelectorAll('body > div > div.gallery-content > div').forEach(elem => {
-            getFilterBook(elem).folded = false;
+            getFilterBook(elem).applySavedFoldState();
         });
         document.querySelectorAll('body > div > div.gallery-content .hitomi-match').forEach(el => {
             el.classList.remove('hitomi-match');
@@ -663,6 +708,7 @@
     }
 
     async function installFilter() {
+        await loadFoldedBookIds();
         await createFilterUI();
         const blackList = await loadBlacklist();
         observeGallery(blackList);
@@ -935,7 +981,7 @@
     function handleFoldFocusedBook() {
         if (!focusedBook) return false;
 
-        getFilterBook(focusedBook).fold();
+        getFilterBook(focusedBook).setManualFolded(true);
         return true;
     }
 
