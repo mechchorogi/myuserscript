@@ -891,6 +891,28 @@
         return true;
     }
 
+    function openUrlInNewTab(url) {
+        if (typeof GM !== 'undefined' && typeof GM.openInTab === 'function') {
+            GM.openInTab(url, {
+                active: true,
+                insert: true,
+                setParent: true
+            });
+        } else {
+            window.open(url, '_blank', 'noopener,noreferrer');
+        }
+    }
+
+    function openFocusedBookReader() {
+        if (!focusedBook) return false;
+
+        const bookId = getBookIdFromElement(focusedBook);
+        if (!bookId) return false;
+
+        openUrlInNewTab(new URL(`/reader/${bookId}.html`, location.href).href);
+        return true;
+    }
+
     function clickReadOnlineButton() {
         const readOnlineButton = document.querySelector('a#read-online-button');
         if (!readOnlineButton) return false;
@@ -1022,7 +1044,7 @@
 
         if (e.key === 'r') {
             if (isReaderPage()) return;
-            if (clickReadOnlineButton()) {
+            if (clickReadOnlineButton() || openFocusedBookReader()) {
                 e.preventDefault();
             }
             return;
