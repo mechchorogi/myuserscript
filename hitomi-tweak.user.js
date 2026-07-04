@@ -916,6 +916,9 @@
             const downloaded = Boolean((key && history[key]) || (bookId && history[bookId]));
 
             setBookDownloadedIndicator(book, downloaded);
+            if (downloaded) {
+                getFilterBook(book).fold();
+            }
         });
     }
 
@@ -954,6 +957,7 @@
         localHistory[key] = entry;
         saveLocalDownloadHistory(localHistory);
         setBookDownloadedIndicator(book, true);
+        getFilterBook(book).fold();
         syncDownloadHistoryEntry(key, entry);
     }
 
