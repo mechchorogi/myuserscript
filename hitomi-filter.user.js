@@ -252,6 +252,10 @@ async function blacklistClickHandler(e) {
     }
 }
 
+function isEditableTarget(target) {
+    return target.closest('input, textarea, select, [contenteditable="true"]');
+}
+
 async function createUI() {
     const panel = document.createElement('div');
     panel.id = 'hitomi-filter-panel';
@@ -400,6 +404,8 @@ async function createUI() {
 
     window.markModeBtn = markModeBtn;
     document.addEventListener('keydown', (e) => {
+        if (isEditableTarget(e.target)) return;
+
         if (e.key === 'b' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
             e.preventDefault();
             markModeBtn.click();
