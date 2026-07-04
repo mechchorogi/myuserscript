@@ -105,9 +105,24 @@
         return true;
     }
 
+    function clickReadOnlineButton() {
+        const readOnlineButton = document.querySelector('a#read-online-button');
+        if (!readOnlineButton) return false;
+
+        readOnlineButton.click();
+        return true;
+    }
+
     function handleBookNavigationKeydown(e) {
-        if (!['j', 'k', 'v'].includes(e.key) || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+        if (!['j', 'k', 'r', 'v'].includes(e.key) || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
         if (isEditableTarget(e.target)) return;
+
+        if (e.key === 'r') {
+            if (clickReadOnlineButton()) {
+                e.preventDefault();
+            }
+            return;
+        }
 
         if (e.key === 'v') {
             if (openFocusedBookInBackgroundTab()) {
