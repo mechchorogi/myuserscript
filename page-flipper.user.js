@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Page Flipper
 // @namespace    http://tampermonkey.net/
-// @version      2.1.2
+// @version      2.2.0
 // @description  Use arrow keys and h/l to flip pages via rel=next/prev links on any site
 // @match        http://*/*
 // @match        https://*/*
