@@ -15,7 +15,18 @@
     'use strict';
 
     const focusedBookClassName = 'hitomi-enhancer-focused-book';
+    const helpOverlayClassName = 'hitomi-enhancer-help-overlay';
+    const helpOverlayHiddenClassName = 'hitomi-enhancer-help-overlay-hidden';
+    const keyboardShortcuts = [
+        ['j', 'Focus next book'],
+        ['k', 'Focus previous book'],
+        ['v', 'Open focused book in background tab'],
+        ['r', 'Open read online link'],
+        ['c', 'Close current tab'],
+        ['/', 'Toggle this help']
+    ];
     let focusedBook = null;
+    let helpOverlay = null;
 
     function removeAdPlaceholder() {
         const content = document.querySelector('div.content, div.top-content');
@@ -47,6 +58,65 @@
                     0 0 26px rgba(56, 189, 248, 0.38),
                     0 12px 34px rgba(15, 23, 42, 0.16);
                 transition: outline-color 120ms ease, box-shadow 120ms ease;
+            }
+
+            .${helpOverlayClassName} {
+                position: fixed;
+                inset: 0;
+                z-index: 2147483647;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 24px;
+                background: rgba(15, 23, 42, 0.58);
+                color: #e5edf7;
+                font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            }
+
+            .${helpOverlayHiddenClassName} {
+                display: none;
+            }
+
+            .${helpOverlayClassName} > div {
+                width: min(420px, 100%);
+                padding: 18px;
+                border: 1px solid rgba(148, 163, 184, 0.38);
+                border-radius: 8px;
+                background: rgba(17, 24, 39, 0.96);
+                box-shadow: 0 22px 70px rgba(0, 0, 0, 0.34);
+            }
+
+            .${helpOverlayClassName} h2 {
+                margin: 0 0 14px;
+                color: #f8fafc;
+                font-size: 16px;
+                font-weight: 700;
+                letter-spacing: 0;
+            }
+
+            .${helpOverlayClassName} dl {
+                display: grid;
+                grid-template-columns: max-content 1fr;
+                gap: 10px 14px;
+                margin: 0;
+            }
+
+            .${helpOverlayClassName} dt {
+                min-width: 32px;
+                padding: 2px 8px;
+                border: 1px solid rgba(148, 163, 184, 0.5);
+                border-radius: 6px;
+                background: rgba(30, 41, 59, 0.92);
+                color: #f8fafc;
+                font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+                font-size: 13px;
+                line-height: 1.45;
+                text-align: center;
+            }
+
+            .${helpOverlayClassName} dd {
+                margin: 0;
+                color: #cbd5e1;
             }
         `;
         document.head.appendChild(style);
@@ -118,9 +188,51 @@
         window.close();
     }
 
+    function createHelpOverlay() {
+        const overlay = document.createElement('div');
+        const panel = document.createElement('div');
+        const title = document.createElement('h2');
+        const list = document.createElement('dl');
+
+        overlay.className = `${helpOverlayClassName} ${helpOverlayHiddenClassName}`;
+        title.textContent = 'Keyboard shortcuts';
+
+        keyboardShortcuts.forEach(([key, description]) => {
+            const term = document.createElement('dt');
+            const detail = document.createElement('dd');
+
+            term.textContent = key;
+            detail.textContent = description;
+            list.append(term, detail);
+        });
+
+        panel.append(title, list);
+        overlay.append(panel);
+        document.body.append(overlay);
+
+        return overlay;
+    }
+
+    function isHelpOverlayOpen() {
+        return Boolean(helpOverlay && !helpOverlay.classList.contains(helpOverlayHiddenClassName));
+    }
+
+    function toggleHelpOverlay() {
+        helpOverlay ||= createHelpOverlay();
+        helpOverlay.classList.toggle(helpOverlayHiddenClassName);
+    }
+
     function handleBookNavigationKeydown(e) {
-        if (!['c', 'j', 'k', 'r', 'v'].includes(e.key) || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+        if (!['/', 'c', 'j', 'k', 'r', 'v'].includes(e.key) || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
         if (isEditableTarget(e.target)) return;
+
+        if (e.key === '/') {
+            e.preventDefault();
+            toggleHelpOverlay();
+            return;
+        }
+
+        if (isHelpOverlayOpen()) return;
 
         if (e.key === 'c') {
             e.preventDefault();
