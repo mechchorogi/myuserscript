@@ -2,7 +2,7 @@
 // @name         Hitomi::Tweak
 // @namespace    http://hitomi.la/
 // @version      1.0.0
-// @description  Combine hitomi.la filtering, download history, reader progress, and keyboard tweaks
+// @description  Filter, fold, track downloads, show reader progress, and add keyboard shortcuts on hitomi.la
 // @author       mechchorogi
 // @match        https://hitomi.la/*
 // @icon         https://www.google.com/s2/favicons?domain=hitomi.la
@@ -12,6 +12,14 @@
 // @grant        window.close
 // @run-at       document-idle
 // ==/UserScript==
+
+// Features:
+// - Filter gallery books with a GM-stored blacklist.
+// - Import and export blacklist JSON backups.
+// - Fold gallery books and persist the folded state.
+// - Track downloads on book pages.
+// - Show page progress in the reader.
+// - Add keyboard shortcuts for help, filtering, downloads, navigation, reading, folding, and page closing.
 
 (function() {
     'use strict';
