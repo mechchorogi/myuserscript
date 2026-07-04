@@ -415,6 +415,10 @@
             saveFoldedBookIds();
         }
 
+        toggleManualFolded() {
+            this.setManualFolded(!this.#isFolded());
+        }
+
         applySavedFoldState() {
             this.folded = Boolean(this.bookId && foldedBookIds.has(this.bookId));
         }
@@ -1453,7 +1457,7 @@
     function handleFoldFocusedBook() {
         if (!focusedBook) return false;
 
-        getFilterBook(focusedBook).setManualFolded(true);
+        getFilterBook(focusedBook).toggleManualFolded();
         return true;
     }
 
