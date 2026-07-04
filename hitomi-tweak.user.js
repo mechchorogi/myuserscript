@@ -29,6 +29,7 @@
         ['d', 'Download on book page'],
         ['j', 'Focus next book'],
         ['k', 'Focus previous book'],
+        ['t', 'Fold focused book'],
         ['v', 'Open focused book in background tab'],
         ['r', 'Open read online link'],
         ['c', 'Close current tab']
@@ -931,8 +932,15 @@
         return true;
     }
 
+    function handleFoldFocusedBook() {
+        if (!focusedBook) return false;
+
+        getFilterBook(focusedBook).fold();
+        return true;
+    }
+
     function handleGlobalKeydown(e) {
-        if (!['/', 'b', 'c', 'd', 'j', 'k', 'r', 'v'].includes(e.key) || !hasPlainModifierState(e)) return;
+        if (!['/', 'b', 'c', 'd', 'j', 'k', 'r', 't', 'v'].includes(e.key) || !hasPlainModifierState(e)) return;
         if (isEditableTarget(e.target)) return;
 
         if (e.key === '/') {
@@ -977,6 +985,14 @@
         if (e.key === 'v') {
             if (isReaderPage()) return;
             if (openFocusedBookInBackgroundTab()) {
+                e.preventDefault();
+            }
+            return;
+        }
+
+        if (e.key === 't') {
+            if (isReaderPage()) return;
+            if (handleFoldFocusedBook()) {
                 e.preventDefault();
             }
             return;
