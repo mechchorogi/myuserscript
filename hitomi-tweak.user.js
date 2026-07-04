@@ -10,6 +10,9 @@
 // @grant        GM.setValue
 // @grant        GM.openInTab
 // @grant        window.close
+// @grant        unsafeWindow
+// @require      https://ltn.gold-usergeneratedcontent.net/FileSaver.min.js
+// @require      https://ltn.gold-usergeneratedcontent.net/jszip.min.js
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -17,9 +20,11 @@
 // - Filter gallery books with a GM-stored blacklist.
 // - Import and export blacklist JSON backups.
 // - Fold gallery books and persist the folded state.
-// - Track downloads on book pages.
+// - Download and track books from book and list pages, with up to four list downloads at once.
 // - Show page progress in the reader.
 // - Add keyboard shortcuts for help, filtering, downloads, navigation, reading, folding, and page closing.
+
+/* global JSZip, saveAs, unsafeWindow */
 
 (function() {
     'use strict';
@@ -27,6 +32,14 @@
     const blacklistKeys = ['author', 'language', 'series', 'tag', 'title', 'type'];
     const downloadHistoryKey = 'hitomi-tweak-download-history';
     const foldedBookIdsKey = 'hitomi-tweak-folded-book-ids';
+    const maxListDownloadCount = 4;
+    const downloadProgressStackClassName = 'hitomi-tweak-download-progress-stack';
+    const downloadProgressClassName = 'hitomi-tweak-download-progress';
+    const bookDownloadProgressClassName = 'hitomi-tweak-book-download-progress';
+    const bookDownloadDoneClassName = 'hitomi-tweak-book-download-done';
+    const bookDownloadErrorClassName = 'hitomi-tweak-book-download-error';
+    const bookDownloadProgressLabelClassName = 'hitomi-tweak-book-download-progress-label';
+    const downloadedBookHeadingClassName = 'hitomi-tweak-downloaded-book-heading';
     const focusedBookClassName = 'hitomi-tweak-focused-book';
     const helpOverlayClassName = 'hitomi-tweak-help-overlay';
     const helpOverlayHiddenClassName = 'hitomi-tweak-help-overlay-hidden';
@@ -35,7 +48,7 @@
     const keyboardShortcuts = [
         ['/', 'Toggle this help'],
         ['b', 'Toggle blacklist mode'],
-        ['d', 'Download on book page'],
+        ['d', 'Download current book (up to 4 on list pages)'],
         ['j', 'Focus next book'],
         ['k', 'Focus previous book'],
         ['t', 'Fold focused book'],
@@ -50,6 +63,10 @@
     let foldedBookIds = new Set();
     let helpOverlay = null;
     let isHandlingDownload = false;
+    let activeListDownloads = new Map();
+    let galleryInfoLoadQueue = Promise.resolve();
+    let listDownloadNotice = null;
+    let listDownloadProgressStack = null;
 
     function isReaderPage() {
         return location.pathname.startsWith('/reader/');
@@ -231,6 +248,97 @@
             .${helpOverlayClassName} dd {
                 margin: 0;
                 color: #cbd5e1;
+            }
+
+            .${downloadProgressStackClassName} {
+                position: fixed;
+                right: 176px;
+                bottom: 16px;
+                z-index: 10000;
+                width: min(320px, calc(100vw - 32px));
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+                pointer-events: none;
+            }
+
+            .${downloadProgressClassName} {
+                padding: 12px;
+                border: 1px solid rgba(15, 23, 42, 0.16);
+                border-radius: 8px;
+                background: rgba(255, 255, 255, 0.96);
+                box-shadow: 0 12px 34px rgba(15, 23, 42, 0.22);
+                color: #0f172a;
+                font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            }
+
+            .${downloadProgressClassName} div {
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            div.gallery-content > div.${bookDownloadProgressClassName} {
+                --hitomi-tweak-download-percent: 0%;
+                background-image:
+                    linear-gradient(
+                        90deg,
+                        rgba(59, 130, 246, 0.22) 0 var(--hitomi-tweak-download-percent),
+                        rgba(255, 255, 255, 0) var(--hitomi-tweak-download-percent) 100%
+                    ) !important;
+                background-repeat: no-repeat !important;
+                transition: background-image 160ms ease;
+            }
+
+            div.gallery-content > div.${bookDownloadDoneClassName} {
+                background-image:
+                    linear-gradient(
+                        90deg,
+                        rgba(59, 130, 246, 0.32) 0 100%,
+                        rgba(255, 255, 255, 0) 100%
+                    ) !important;
+            }
+
+            div.gallery-content > div.${bookDownloadErrorClassName} {
+                background-image:
+                    linear-gradient(
+                        90deg,
+                        rgba(239, 68, 68, 0.24) 0 100%,
+                        rgba(255, 255, 255, 0) 100%
+                    ) !important;
+            }
+
+            .${bookDownloadProgressLabelClassName} {
+                position: absolute;
+                top: 8px;
+                right: 8px;
+                z-index: 2;
+                max-width: calc(100% - 16px);
+                padding: 3px 8px;
+                border-radius: 6px;
+                background: rgba(15, 23, 42, 0.82);
+                color: #f8fafc;
+                font: 12px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                pointer-events: none;
+            }
+
+            h1.lillie.${downloadedBookHeadingClassName}::before {
+                content: "✓";
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                width: 18px;
+                height: 18px;
+                margin-right: 6px;
+                border: 1px solid rgba(37, 99, 235, 0.42);
+                border-radius: 50%;
+                background: rgba(59, 130, 246, 0.16);
+                color: #2563eb;
+                font: 700 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                vertical-align: 2px;
             }
         `;
         document.head.appendChild(style);
@@ -453,17 +561,17 @@
 
     function filter(blackList) {
         if (!filterEnabled) return;
-        document.querySelectorAll('body > div > div.gallery-content > div').forEach(elem => {
+        document.querySelectorAll('div.gallery-content > div').forEach(elem => {
             const book = getFilterBook(elem);
             book.setFiltered(getMatches(book, blackList));
         });
     }
 
     function clearFilter() {
-        document.querySelectorAll('body > div > div.gallery-content > div').forEach(elem => {
+        document.querySelectorAll('div.gallery-content > div').forEach(elem => {
             getFilterBook(elem).applySavedFoldState();
         });
-        document.querySelectorAll('body > div > div.gallery-content .hitomi-match').forEach(el => {
+        document.querySelectorAll('div.gallery-content .hitomi-match').forEach(el => {
             el.classList.remove('hitomi-match');
         });
     }
@@ -705,6 +813,7 @@
             if (hasContent) {
                 const currentBlackList = await loadBlacklist();
                 filter(currentBlackList);
+                refreshDownloadIndicators().catch(() => {});
             }
         });
         observer.observe(gallery, { childList: true });
@@ -712,6 +821,7 @@
         const hasContent = Array.from(gallery.children).some(c => c.id !== 'loader-content');
         if (hasContent) {
             filter(blackList);
+            refreshDownloadIndicators().catch(() => {});
         }
     }
 
@@ -783,6 +893,37 @@
             .catch(() => {});
     }
 
+    function getBookLinkFromElement(elem) {
+        return elem?.querySelector(':scope > h1.lillie a[href], :scope > h1 a[href], :scope > a[href]') || null;
+    }
+
+    function getDownloadHistoryKeyFromBook(book) {
+        const link = getBookLinkFromElement(book);
+        return link ? new URL(link.getAttribute('href'), location.href).pathname.replace(/\/$/, '') : null;
+    }
+
+    function setBookDownloadedIndicator(book, downloaded) {
+        const heading = book.querySelector(':scope > h1.lillie');
+        if (!heading) return;
+
+        heading.classList.toggle(downloadedBookHeadingClassName, downloaded);
+    }
+
+    function applyDownloadHistoryToBooks(history) {
+        document.querySelectorAll('div.gallery-content > div').forEach(book => {
+            const key = getDownloadHistoryKeyFromBook(book);
+            const bookId = getBookIdFromElement(book);
+            const downloaded = Boolean((key && history[key]) || (bookId && history[bookId]));
+
+            setBookDownloadedIndicator(book, downloaded);
+        });
+    }
+
+    async function refreshDownloadIndicators() {
+        const history = await loadDownloadHistory();
+        applyDownloadHistoryToBooks(history);
+    }
+
     function markCurrentBookDownloaded() {
         const key = getDownloadKey();
         const entry = {
@@ -795,6 +936,24 @@
         localHistory[key] = entry;
         saveLocalDownloadHistory(localHistory);
         markDLButtonDownloaded();
+        syncDownloadHistoryEntry(key, entry);
+    }
+
+    function markListBookDownloaded(book, galleryInfo) {
+        if (!book) return;
+
+        const link = getBookLinkFromElement(book);
+        const key = link ? new URL(link.getAttribute('href'), location.href).pathname.replace(/\/$/, '') : String(galleryInfo.id);
+        const entry = {
+            title: galleryInfo.japanese_title || galleryInfo.title || book.querySelector('h1.lillie')?.textContent.trim() || document.title,
+            url: link ? new URL(link.getAttribute('href'), location.href).href : location.href,
+            downloadedAt: new Date().toISOString()
+        };
+        const localHistory = loadLocalDownloadHistory();
+
+        localHistory[key] = entry;
+        saveLocalDownloadHistory(localHistory);
+        setBookDownloadedIndicator(book, true);
         syncDownloadHistoryEntry(key, entry);
     }
 
@@ -816,6 +975,285 @@
         } finally {
             isHandlingDownload = false;
         }
+    }
+
+    function getListDownloadProgressStack() {
+        if (listDownloadProgressStack) return listDownloadProgressStack;
+
+        listDownloadProgressStack = document.createElement('div');
+        listDownloadProgressStack.className = downloadProgressStackClassName;
+        document.body.appendChild(listDownloadProgressStack);
+        return listDownloadProgressStack;
+    }
+
+    function createListDownloadNotice() {
+        const container = document.createElement('div');
+        const label = document.createElement('div');
+
+        container.className = downloadProgressClassName;
+        container.append(label);
+        getListDownloadProgressStack().appendChild(container);
+
+        return { container, label };
+    }
+
+    function updateListDownloadNotice(notice, text) {
+        notice.label.textContent = text;
+    }
+
+    function hideListDownloadNotice(notice) {
+        if (!notice) return;
+
+        notice.container.remove();
+    }
+
+    function showListDownloadNotice(text) {
+        if (listDownloadNotice) {
+            window.clearTimeout(listDownloadNotice.timer);
+        } else {
+            listDownloadNotice = createListDownloadNotice();
+        }
+
+        updateListDownloadNotice(listDownloadNotice, text);
+        listDownloadNotice.timer = window.setTimeout(() => {
+            hideListDownloadNotice(listDownloadNotice);
+            listDownloadNotice = null;
+        }, 1800);
+    }
+
+    function createBookDownloadProgress(book) {
+        const label = document.createElement('div');
+
+        label.className = bookDownloadProgressLabelClassName;
+        book.querySelectorAll(`:scope > .${bookDownloadProgressLabelClassName}`).forEach(elem => elem.remove());
+        book.classList.remove(bookDownloadDoneClassName, bookDownloadErrorClassName);
+        book.classList.add(bookDownloadProgressClassName);
+        book.style.setProperty('--hitomi-tweak-download-percent', '0%');
+        book.appendChild(label);
+
+        return { book, label };
+    }
+
+    function updateBookDownloadProgress(downloadProgress, text, percent) {
+        const normalizedPercent = Math.max(0, Math.min(100, percent));
+
+        downloadProgress.book.style.setProperty('--hitomi-tweak-download-percent', `${normalizedPercent}%`);
+        downloadProgress.label.textContent = text;
+    }
+
+    function finishBookDownloadProgress(downloadProgress, text, className) {
+        updateBookDownloadProgress(downloadProgress, text, 100);
+        downloadProgress.book.classList.add(className);
+    }
+
+    function hideBookDownloadProgress(downloadProgress) {
+        if (!downloadProgress) return;
+        if (!downloadProgress.label.isConnected) return;
+
+        downloadProgress.label.remove();
+        downloadProgress.book.classList.remove(
+            bookDownloadProgressClassName,
+            bookDownloadDoneClassName,
+            bookDownloadErrorClassName
+        );
+        downloadProgress.book.style.removeProperty('--hitomi-tweak-download-percent');
+    }
+
+    function wait(ms) {
+        return new Promise(resolve => window.setTimeout(resolve, ms));
+    }
+
+    async function waitForHitomiGg() {
+        for (let i = 0; i < 50; i++) {
+            if (unsafeWindow?.gg?.m && unsafeWindow.gg.b && unsafeWindow.gg.s) {
+                return unsafeWindow.gg;
+            }
+            await wait(100);
+        }
+
+        throw new Error('Hitomi image URL helpers are not ready.');
+    }
+
+    function loadGalleryInfoScript(galleryId) {
+        return new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+
+            script.src = `https://ltn.gold-usergeneratedcontent.net/galleries/${galleryId}.js`;
+            script.onload = () => {
+                const galleryInfo = unsafeWindow.galleryinfo;
+
+                script.remove();
+                if (galleryInfo?.id && String(galleryInfo.id) === String(galleryId)) {
+                    resolve(galleryInfo);
+                } else {
+                    reject(new Error(`Could not load galleryinfo for ${galleryId}.`));
+                }
+            };
+            script.onerror = () => {
+                script.remove();
+                reject(new Error(`Could not load galleryinfo script for ${galleryId}.`));
+            };
+            document.head.appendChild(script);
+        });
+    }
+
+    function loadGalleryInfo(galleryId) {
+        const task = galleryInfoLoadQueue.then(
+            () => loadGalleryInfoScript(galleryId),
+            () => loadGalleryInfoScript(galleryId)
+        );
+
+        galleryInfoLoadQueue = task.catch(() => {});
+        return task;
+    }
+
+    function subdomainFromUrl(url, base, dir, gg) {
+        let retval = '';
+        if (!base) {
+            if (dir === 'webp') {
+                retval = 'w';
+            } else if (dir === 'avif') {
+                retval = 'a';
+            }
+        }
+
+        const match = /\/[0-9a-f]{61}([0-9a-f]{2})([0-9a-f])/.exec(url);
+        if (!match) return retval;
+
+        const group = parseInt(match[2] + match[1], 16);
+        if (Number.isNaN(group)) return retval;
+
+        if (base) {
+            return `${String.fromCharCode(97 + gg.m(group))}${base}`;
+        }
+        return `${retval}${1 + gg.m(group)}`;
+    }
+
+    function urlFromUrl(url, base, dir, gg) {
+        return url.replace(/\/\/..?\.(?:gold-usergeneratedcontent\.net|hitomi\.la)\//, `//${subdomainFromUrl(url, base, dir, gg)}.gold-usergeneratedcontent.net/`);
+    }
+
+    function fullPathFromHash(hash, gg) {
+        return `${gg.b}${gg.s(hash)}/${hash}`;
+    }
+
+    function urlFromHash(image, dir, ext, gg) {
+        const actualExt = ext || dir || image.name.split('.').pop();
+        const actualDir = dir === 'webp' || dir === 'avif' ? '' : `${dir}/`;
+
+        return `https://a.gold-usergeneratedcontent.net/${actualDir}${fullPathFromHash(image.hash, gg)}.${actualExt}`;
+    }
+
+    function urlFromUrlFromHash(image, dir, ext, base, gg) {
+        return urlFromUrl(urlFromHash(image, dir, ext, gg), base, dir, gg);
+    }
+
+    function sanitizeFileName(fileName) {
+        return fileName.replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, ' ').trim() || 'hitomi';
+    }
+
+    function downloadBlob(url) {
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+
+            xhr.onreadystatechange = function() {
+                if (this.readyState !== 4) return;
+
+                if (this.status === 200) {
+                    resolve(this.response);
+                } else {
+                    reject(new Error(`downloadBlob(${url}) failed with ${this.status}.`));
+                }
+            };
+            xhr.open('GET', url);
+            xhr.responseType = 'arraybuffer';
+            xhr.send();
+        });
+    }
+
+    async function retryDownloadBlob(url, retries = 3) {
+        let lastError = null;
+
+        for (let i = 0; i < retries; i++) {
+            try {
+                return await downloadBlob(url);
+            } catch (e) {
+                lastError = e;
+                await wait(500);
+            }
+        }
+
+        throw lastError;
+    }
+
+    async function downloadFocusedBookFromList() {
+        const book = focusedBook;
+        if (!book) return false;
+
+        const galleryId = getBookIdFromElement(book);
+        if (!galleryId) return false;
+
+        if (activeListDownloads.has(galleryId)) {
+            showListDownloadNotice('This book is already downloading.');
+            return false;
+        }
+
+        if (activeListDownloads.size >= maxListDownloadCount) {
+            showListDownloadNotice(`Up to ${maxListDownloadCount} list downloads can run at once.`);
+            return false;
+        }
+
+        const downloadProgress = createBookDownloadProgress(book);
+        activeListDownloads.set(galleryId, downloadProgress);
+
+        try {
+            updateBookDownloadProgress(downloadProgress, 'Loading...', 0);
+            const [gg, galleryInfo] = await Promise.all([
+                waitForHitomiGg(),
+                loadGalleryInfo(galleryId)
+            ]);
+
+            if (galleryInfo.type === 'anime') {
+                finishBookDownloadProgress(downloadProgress, 'Anime not supported', bookDownloadErrorClassName);
+                window.setTimeout(() => hideBookDownloadProgress(downloadProgress), 1800);
+                return false;
+            }
+
+            const zip = new JSZip();
+            const title = sanitizeFileName(galleryInfo.japanese_title || galleryInfo.title || `hitomi-${galleryId}`);
+
+            for (let i = 0; i < galleryInfo.files.length; i++) {
+                const image = galleryInfo.files[i];
+                const url = urlFromUrlFromHash(image, 'webp', 'webp', undefined, gg);
+                const imageName = image.name.replace(/[^.]*$/, 'webp');
+
+                updateBookDownloadProgress(downloadProgress, `${i + 1} / ${galleryInfo.files.length}`, i / galleryInfo.files.length * 100);
+                zip.file(imageName, await retryDownloadBlob(url), { binary: true });
+                await wait(1000);
+            }
+
+            updateBookDownloadProgress(downloadProgress, 'Zipping...', 100);
+            saveAs(await zip.generateAsync({ type: 'blob' }), `${title}.zip`);
+            markListBookDownloaded(book, galleryInfo);
+            finishBookDownloadProgress(downloadProgress, 'Downloaded', bookDownloadDoneClassName);
+            window.setTimeout(() => hideBookDownloadProgress(downloadProgress), 1400);
+            return true;
+        } catch (e) {
+            console.error(e);
+            finishBookDownloadProgress(downloadProgress, 'Download failed', bookDownloadErrorClassName);
+            return false;
+        } finally {
+            activeListDownloads.delete(galleryId);
+        }
+    }
+
+    function installDownloadNavigationGuard() {
+        window.addEventListener('beforeunload', e => {
+            if (activeListDownloads.size === 0) return;
+
+            e.preventDefault();
+            e.returnValue = '';
+        });
     }
 
     function installDownloadClickHistory() {
@@ -1037,10 +1475,13 @@
         if (e.key === 'd') {
             if (isReaderPage()) return;
             const dlButton = getDLButton();
-            if (!dlButton) return;
 
             e.preventDefault();
-            downloadBook(dlButton);
+            if (dlButton) {
+                downloadBook(dlButton);
+            } else {
+                downloadFocusedBookFromList();
+            }
             return;
         }
 
@@ -1169,6 +1610,7 @@
         }
 
         installEnhancer();
+        installDownloadNavigationGuard();
         installHistory();
         await installFilter();
     }
