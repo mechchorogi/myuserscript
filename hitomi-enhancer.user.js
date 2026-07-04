@@ -6,7 +6,7 @@
 // @author       mechchorogi
 // @match        https://hitomi.la/*
 // @icon         https://www.google.com/s2/favicons?domain=hitomi.la
-// @grant        none
+// @grant        GM.openInTab
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -86,9 +86,35 @@
         scrollBookIntoViewIfNeeded(focusedBook);
     }
 
+    function openFocusedBookInBackgroundTab() {
+        const link = focusedBook?.querySelector(':scope > h1 > a');
+        if (!link?.href) return false;
+
+        if (typeof GM !== 'undefined' && typeof GM.openInTab === 'function') {
+            GM.openInTab(link.href, {
+                active: false,
+                insert: true,
+                setParent: true
+            });
+        } else {
+            const opened = window.open(link.href, '_blank', 'noopener,noreferrer');
+            opened?.blur();
+            window.focus();
+        }
+
+        return true;
+    }
+
     function handleBookNavigationKeydown(e) {
-        if ((e.key !== 'j' && e.key !== 'k') || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+        if (!['j', 'k', 'v'].includes(e.key) || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
         if (isEditableTarget(e.target)) return;
+
+        if (e.key === 'v') {
+            if (openFocusedBookInBackgroundTab()) {
+                e.preventDefault();
+            }
+            return;
+        }
 
         const books = getBooks();
         if (books.length === 0) return;
