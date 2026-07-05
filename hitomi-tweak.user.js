@@ -1696,7 +1696,16 @@
         if (!dlButton) return;
 
         dlButton.addEventListener('click', () => {
-            markCurrentBookDownloaded();
+            // The page's own galleries/<id>.js script has already set this global by
+            // the time a user can click Download, so use it instead of passing no
+            // galleryInfo — otherwise every click-triggered download is recorded
+            // without metadata and the history page has to re-fetch it later.
+            const galleryId = getCurrentGalleryId();
+            const galleryInfo = unsafeWindow.galleryinfo?.id && String(unsafeWindow.galleryinfo.id) === String(galleryId)
+                ? unsafeWindow.galleryinfo
+                : null;
+
+            markCurrentBookDownloaded(galleryInfo, galleryId);
         }, true);
     }
 
