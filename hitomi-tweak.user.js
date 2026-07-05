@@ -992,9 +992,11 @@
         const localHistory = loadLocalDownloadHistory();
         const history = await GM.getValue(downloadHistoryKey, {});
 
+        // The standalone history page can hydrate metadata only in localStorage, so
+        // local entries must win over older GM entries when the stores diverge.
         return {
-            ...localHistory,
-            ...(history && typeof history === 'object' && !Array.isArray(history) ? history : {})
+            ...(history && typeof history === 'object' && !Array.isArray(history) ? history : {}),
+            ...localHistory
         };
     }
 
