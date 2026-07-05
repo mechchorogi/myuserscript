@@ -24,6 +24,12 @@
 // - Show page progress in the reader.
 // - Add keyboard shortcuts for help, filtering, downloads, navigation, reading, folding, and page closing.
 
+// Maintenance notes:
+// - A "book" on list pages is always treated as `div.gallery-content > div`; do not
+//   rely on `.dj`, because Hitomi uses multiple class names for book containers.
+// - Book ids come from the trailing number in the book URL. The same id powers fold
+//   persistence, reader URL inference, list-page downloads, and downloaded markers.
+
 /* global JSZip, saveAs, unsafeWindow */
 
 (function() {
@@ -47,6 +53,8 @@
     const helpOverlayHiddenClassName = 'hitomi-tweak-help-overlay-hidden';
     const filterPanelId = 'hitomi-tweak-filter-panel';
     const filterBookMap = new WeakMap();
+    // Keep the help overlay generated from the same source as key handling so the
+    // displayed shortcuts do not drift from the actual behavior.
     const keyboardShortcuts = [
         ['/', 'Toggle this help'],
         ['b', 'Toggle blacklist mode'],
@@ -79,6 +87,8 @@
     }
 
     function getBookIdFromElement(elem) {
+        // List-page features must work for both old and current Hitomi markup, so
+        // prefer direct child title/anchor links and derive the id from the URL.
         const link = elem.querySelector(':scope > h1.lillie a[href], :scope > h1 a[href], :scope > a[href]');
         if (!link) return null;
 
@@ -88,6 +98,8 @@
     }
 
     async function loadFoldedBookIds() {
+        // The current format is an array, but an older object map is accepted so
+        // manual folded state survives earlier development versions.
         const value = await GM.getValue(foldedBookIdsKey, []);
         if (Array.isArray(value)) {
             foldedBookIds = new Set(value.map(String));
@@ -355,6 +367,8 @@
         document.head.appendChild(style);
     }
 
+    // FilterBook is the shared list-card abstraction for filtering, folding,
+    // keyboard focus, downloaded markers, and download progress overlays.
     class FilterBook {
         constructor(elem) {
             this.elem = elem;
@@ -415,6 +429,8 @@
         }
 
         setManualFolded(state) {
+            // Only explicit user toggles write foldedBookIds. Automatic folds from
+            // blacklist matches or downloaded history should not become permanent.
             this.folded = state;
 
             if (!this.bookId) return;
@@ -459,6 +475,8 @@
         }
 
         setFiltered(matches) {
+            // Filtering folds matches visually, but restoring the filter should return
+            // the book to the saved manual fold state instead of overwriting it.
             this.elem.querySelectorAll('.hitomi-match').forEach(el => el.classList.remove('hitomi-match'));
 
             if (matches.matched) {
@@ -576,6 +594,8 @@
 
     function filter(blackList) {
         if (!filterEnabled) return;
+        // The stable book boundary is the direct child of gallery-content, not a
+        // specific card class. Several Hitomi card classes have appeared over time.
         document.querySelectorAll('div.gallery-content > div').forEach(elem => {
             const book = getFilterBook(elem);
             book.setFiltered(getMatches(book, blackList));
@@ -824,6 +844,8 @@
         if (!gallery) return;
 
         const observer = new MutationObserver(async () => {
+            // Hitomi list pages lazy-load cards. Reapply both blacklist folding and
+            // downloaded indicators whenever real gallery content is inserted.
             const hasContent = Array.from(gallery.children).some(c => c.id !== 'loader-content');
             if (hasContent) {
                 const currentBlackList = await loadBlacklist();
@@ -982,6 +1004,9 @@
     }
 
     function getBookPageTitle(root, galleryInfo, galleryId) {
+        // Book pages hydrate title/author/group from galleryinfo after the initial HTML loads.
+        // Keep DOM reads first for live book pages, but fall back to galleryinfo so list-page downloads
+        // can use the same naming path without fetching and executing the book page.
         return normalizeMetadataText(root.querySelector('h1#gallery-brand > a')?.textContent)
             || galleryInfo?.japanese_title
             || galleryInfo?.title
@@ -989,6 +1014,8 @@
     }
 
     function getBookPageGroup(root, galleryInfo) {
+        // The list page cannot see the rendered Group field. galleryinfo.groups is the source
+        // used by Hitomi's own page hydration, so it is the canonical fallback for naming.
         const tableRows = Array.from(root.querySelectorAll('table tr'));
         for (const row of tableRows) {
             const cells = Array.from(row.children);
@@ -1022,6 +1049,8 @@
         const normalizedAuthors = authors.map(author => normalizeMetadataText(author)).filter(Boolean);
         let authorPart = '';
 
+        // Preserve one or two credited authors in the filename. Collapse three or more
+        // deduplicated authors to Various Artists to keep filenames readable.
         if (normalizedAuthors.length === 1) {
             [authorPart] = normalizedAuthors;
         } else if (normalizedAuthors.length === 2) {
@@ -1043,6 +1072,8 @@
     }
 
     function getDownloadFileNameFromBookPageDocument(root, galleryInfo, galleryId) {
+        // Both book-page and list-page downloads call this. On list pages, root is just the
+        // current document, so the galleryinfo fallback is what supplies the metadata.
         return formatDownloadFileNameFromMetadata({
             group: getBookPageGroup(root, galleryInfo),
             authors: getBookPageAuthors(root, galleryInfo),
@@ -1076,6 +1107,9 @@
     }
 
     function applyDownloadHistoryToBooks(history) {
+        // Downloaded markers are derived from the same history used on book pages.
+        // Downloaded books are folded visually to keep list pages compact, but this
+        // does not write foldedBookIds because it is history-driven state.
         document.querySelectorAll('div.gallery-content > div').forEach(book => {
             const key = getDownloadHistoryKeyFromBook(book);
             const bookId = getBookIdFromElement(book);
@@ -1111,6 +1145,8 @@
     function markListBookDownloaded(book, galleryInfo) {
         if (!book) return;
 
+        // List-page downloads should immediately affect the visible card so users do
+        // not need a reload to see the downloaded marker and compact folded state.
         const link = getBookLinkFromElement(book);
         const key = link ? new URL(link.getAttribute('href'), location.href).pathname.replace(/\/$/, '') : String(galleryInfo.id);
         const entry = {
@@ -1135,6 +1171,8 @@
     }
 
     function createBookPageDownloadState() {
+        // Book-page downloads use Hitomi's original progressbar UI, but the transfer
+        // itself is ours so pressing d again can cancel XHR/throttle waits safely.
         return {
             canceled: false,
             cancelWait: null,
@@ -1164,6 +1202,8 @@
         if (!dlButton) return false;
 
         if (activeBookPageDownload) {
+            // On book pages, pressing d while the same page download is active means
+            // cancel instead of starting a second archive build.
             cancelBookPageDownload(activeBookPageDownload);
             return false;
         }
@@ -1396,6 +1436,8 @@
     }
 
     function loadGalleryInfo(galleryId) {
+        // galleryinfo scripts assign a single global variable. Queue script loads so parallel
+        // list downloads do not race and accidentally read another book's metadata.
         const task = galleryInfoLoadQueue.then(
             () => loadGalleryInfoScript(galleryId),
             () => loadGalleryInfoScript(galleryId)
@@ -1455,6 +1497,8 @@
     }
 
     function urlFromUrlFromHash(image, dir, ext, base, gg) {
+        // These URL helpers mirror Hitomi's common.js/download.js logic so list-page
+        // downloads produce the same image URLs as the native book-page downloader.
         return urlFromUrl(urlFromHash(image, dir, ext, gg), base, dir, gg);
     }
 
@@ -1531,6 +1575,8 @@
     }
 
     function createListDownloadState(downloadProgress) {
+        // Keep cancellation state per download because up to four list downloads can run
+        // concurrently, each with its own pending XHR or throttle wait.
         return {
             canceled: false,
             cancelWait: null,
@@ -1569,6 +1615,8 @@
         activeListDownloads.set(galleryId, downloadState);
 
         try {
+            // The list page only has a gallery id. galleryinfo provides files and metadata
+            // needed both for image URLs and the final archive name.
             updateBookDownloadProgress(downloadProgress, 'Loading...', 0);
             const [gg, galleryInfo] = await Promise.all([
                 waitForHitomiGg(),
@@ -1721,6 +1769,8 @@
     function openFocusedBookReader() {
         if (!focusedBook) return false;
 
+        // List cards do not include a reader link, but Hitomi reader URLs are derived
+        // directly from the gallery id used in the book URL.
         const bookId = getBookIdFromElement(focusedBook);
         if (!bookId) return false;
 
@@ -1760,6 +1810,8 @@
     }
 
     function createHelpOverlay() {
+        // Keep the help overlay lightweight and generated on demand; '/' toggles it,
+        // and other shortcuts intentionally pause while it is open.
         const overlay = document.createElement('div');
         const panel = document.createElement('div');
         const title = document.createElement('h2');
@@ -1810,6 +1862,8 @@
 
         const currentIndex = focusedBook ? books.indexOf(focusedBook) : -1;
         if (currentIndex === -1) {
+            // Mirror j's "start from the first book" behavior: k starts from the last
+            // book when nothing is focused yet.
             focusBook(books[books.length - 1]);
             return true;
         }
@@ -1827,6 +1881,8 @@
     }
 
     function handleGlobalKeydown(e) {
+        // Global shortcuts are plain-key only so browser/system shortcuts and text
+        // entry fields keep their native behavior.
         if (!['/', 'b', 'c', 'd', 'j', 'k', 'r', 't', 'v'].includes(e.key) || !hasPlainModifierState(e)) return;
         if (isEditableTarget(e.target)) return;
 
@@ -1899,6 +1955,8 @@
     }
 
     function installReaderProgress() {
+        // Reader navigation mutates the URL and select state without a full reload,
+        // so progress is updated by observing DOM changes as well as initial render.
         let lastUrl = location.href;
 
         const li = document.createElement('li');
