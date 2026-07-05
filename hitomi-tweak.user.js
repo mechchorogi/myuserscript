@@ -1081,6 +1081,20 @@
         });
     }
 
+    function getDownloadHistoryMetadata(root, galleryInfo, galleryId, fallbackTitle) {
+        // Download history is also used by the standalone history viewer, so store the
+        // normalized metadata there instead of forcing that page to refetch every time.
+        const authors = getBookPageAuthors(root, galleryInfo);
+
+        return {
+            bookId: String(galleryId || galleryInfo?.id || ''),
+            title: getBookPageTitle(root, galleryInfo, galleryId) || fallbackTitle,
+            group: getBookPageGroup(root, galleryInfo),
+            author: authors.join(', '),
+            metadataHydrated: Boolean(galleryInfo)
+        };
+    }
+
     function syncDownloadHistoryEntry(key, entry) {
         loadDownloadHistory()
             .then(history => {
@@ -1127,10 +1141,11 @@
         applyDownloadHistoryToBooks(history);
     }
 
-    function markCurrentBookDownloaded() {
+    function markCurrentBookDownloaded(galleryInfo = null, galleryId = getCurrentGalleryId()) {
         const key = getDownloadKey();
+        const metadata = getDownloadHistoryMetadata(document, galleryInfo, galleryId, getBookTitle());
         const entry = {
-            title: getBookTitle(),
+            ...metadata,
             url: location.href,
             downloadedAt: new Date().toISOString()
         };
@@ -1149,8 +1164,9 @@
         // not need a reload to see the downloaded marker and compact folded state.
         const link = getBookLinkFromElement(book);
         const key = link ? new URL(link.getAttribute('href'), location.href).pathname.replace(/\/$/, '') : String(galleryInfo.id);
+        const metadata = getDownloadHistoryMetadata(document, galleryInfo, galleryInfo.id, book.querySelector('h1.lillie')?.textContent.trim() || document.title);
         const entry = {
-            title: galleryInfo.japanese_title || galleryInfo.title || book.querySelector('h1.lillie')?.textContent.trim() || document.title,
+            ...metadata,
             url: link ? new URL(link.getAttribute('href'), location.href).href : location.href,
             downloadedAt: new Date().toISOString()
         };
@@ -1247,7 +1263,7 @@
             saveAs(zipBlob, `${title}.zip`);
             throwIfDownloadCanceled(downloadState);
             hideBookPageDownloadProgress();
-            markCurrentBookDownloaded();
+            markCurrentBookDownloaded(galleryInfo, galleryId);
             return true;
         } catch (e) {
             if (isDownloadCanceledError(e)) {
