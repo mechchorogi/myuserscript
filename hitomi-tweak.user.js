@@ -39,6 +39,7 @@
     const downloadHistoryKey = 'hitomi-tweak-download-history';
     const foldedBookIdsKey = 'hitomi-tweak-folded-book-ids';
     const nameMapKey = 'hitomi-tweak-name-map';
+    const nameMapPagePath = '/hitomi-tweak-name-map.html';
     const preferredLanguageKey = 'hitomi-tweak-preferred-language';
     const preferredLanguageOptions = [
         ['off', 'Off'],
@@ -97,6 +98,10 @@
         // hitomi-download-history.user.js owns the whole document body on this
         // page, so hitomi-tweak.user.js must not install its own panel/filter UI.
         return location.pathname === '/hitomi-tweak-history.html';
+    }
+
+    function isNameMapPage() {
+        return location.pathname === nameMapPagePath;
     }
 
     function blacklistStorageKey(key) {
@@ -164,6 +169,16 @@
     function resolveJapaneseName(name, kind) {
         const normalized = normalizeNameMapKey(name);
         return (kind === 'group' || kind === 'author') && normalized ? nameMap[kind]?.[normalized] || name : name;
+    }
+
+    function getNameMapEntries(map = nameMap) {
+        return ['group', 'author']
+            .flatMap(kind => Object.entries(map[kind] || {}).map(([romaji, japanese]) => ({ kind, romaji, japanese })))
+            .sort((a, b) => a.romaji.localeCompare(b.romaji, undefined, { numeric: true, sensitivity: 'base' }) || a.kind.localeCompare(b.kind));
+    }
+
+    function countNameMapEntries(map = nameMap) {
+        return getNameMapEntries(map).length;
     }
 
     function normalizePreferredLanguage(value) {
@@ -963,8 +978,9 @@
 
                 const text = await input.files[0].text();
                 try {
+                    const beforeCount = countNameMapEntries();
                     await saveNameMap(JSON.parse(text));
-                    alert('Name map imported');
+                    alert(`Name map imported: ${beforeCount} -> ${countNameMapEntries()} entries`);
                 } catch (e) {
                     alert('Invalid name map format');
                 }
@@ -1001,13 +1017,24 @@
         backupRow.append(exportBtn, importBtn);
 
         const nameMapHeading = document.createElement('div');
-        nameMapHeading.textContent = 'Name Map';
+        const nameMapEditLink = document.createElement('a');
+
+        nameMapEditLink.href = nameMapPagePath;
+        nameMapEditLink.textContent = 'Edit';
+        Object.assign(nameMapEditLink.style, {
+            fontWeight: 'normal'
+        });
         Object.assign(nameMapHeading.style, {
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '10px',
             fontWeight: 'bold',
             marginTop: '2px',
             paddingTop: '12px',
             borderTop: '1px solid rgba(0, 0, 0, 0.3)'
         });
+        nameMapHeading.append('Name Map', nameMapEditLink);
 
         const nameMapBackupRow = document.createElement('div');
         Object.assign(nameMapBackupRow.style, {
@@ -1066,6 +1093,350 @@
         await createFilterUI();
         const blackList = await loadBlacklist();
         observeGallery(blackList);
+    }
+
+    async function renderNameMapPage() {
+        await loadNameMap();
+
+        document.title = 'Hitomi::Tweak Name Map';
+        document.body.replaceChildren();
+
+        const style = document.createElement('style');
+        style.textContent = `
+            :root {
+                color-scheme: light;
+            }
+            body {
+                margin: 0;
+                background: #f6f7f9;
+                color: #1f2328;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+            }
+            .hitomi-name-map-page {
+                box-sizing: border-box;
+                min-height: 100vh;
+                padding: 24px;
+            }
+            .hitomi-name-map-header {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                justify-content: space-between;
+                gap: 12px;
+                margin-bottom: 16px;
+            }
+            .hitomi-name-map-header h1 {
+                margin: 0;
+                font-size: 24px;
+                line-height: 1.25;
+            }
+            .hitomi-name-map-status {
+                min-height: 20px;
+                color: #57606a;
+                font-size: 14px;
+            }
+            .hitomi-name-map-notice {
+                margin-bottom: 16px;
+                padding: 10px 12px;
+                border: 1px solid #d0d7de;
+                background: #fff8c5;
+                border-radius: 6px;
+                font-size: 14px;
+            }
+            .hitomi-name-map-controls,
+            .hitomi-name-map-add-form {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px;
+                margin-bottom: 16px;
+            }
+            .hitomi-name-map-controls input,
+            .hitomi-name-map-add-form input,
+            .hitomi-name-map-add-form select {
+                box-sizing: border-box;
+                min-height: 34px;
+                padding: 6px 8px;
+                border: 1px solid #d0d7de;
+                border-radius: 6px;
+                background: #fff;
+                font: inherit;
+            }
+            .hitomi-name-map-controls input {
+                flex: 1 1 280px;
+            }
+            .hitomi-name-map-add-form input {
+                flex: 1 1 180px;
+            }
+            .hitomi-name-map-controls button,
+            .hitomi-name-map-add-form button,
+            .hitomi-name-map-table button {
+                min-height: 34px;
+                padding: 6px 10px;
+                border: 1px solid #d0d7de;
+                border-radius: 6px;
+                background: #fff;
+                color: #1f2328;
+                font: inherit;
+                cursor: pointer;
+            }
+            .hitomi-name-map-table-wrap {
+                overflow: auto;
+                border: 1px solid #d0d7de;
+                border-radius: 6px;
+                background: #fff;
+            }
+            .hitomi-name-map-table {
+                width: 100%;
+                border-collapse: collapse;
+                table-layout: fixed;
+            }
+            .hitomi-name-map-table th,
+            .hitomi-name-map-table td {
+                padding: 8px 10px;
+                border-bottom: 1px solid #d8dee4;
+                text-align: left;
+                vertical-align: middle;
+                word-break: break-word;
+            }
+            .hitomi-name-map-table th {
+                position: sticky;
+                top: 0;
+                background: #f6f8fa;
+                font-weight: 600;
+            }
+            .hitomi-name-map-table tr:last-child td {
+                border-bottom: 0;
+            }
+            .hitomi-name-map-editable {
+                cursor: text;
+            }
+            .hitomi-name-map-editable input {
+                box-sizing: border-box;
+                width: 100%;
+                min-height: 30px;
+                padding: 4px 6px;
+                border: 1px solid #0969da;
+                border-radius: 4px;
+                font: inherit;
+            }
+        `;
+        document.head.appendChild(style);
+
+        const page = document.createElement('main');
+        const header = document.createElement('div');
+        const title = document.createElement('h1');
+        const status = document.createElement('div');
+        const notice = document.createElement('div');
+        const controls = document.createElement('div');
+        const searchInput = document.createElement('input');
+        const exportBtn = document.createElement('button');
+        const importBtn = document.createElement('button');
+        const addForm = document.createElement('form');
+        const romajiInput = document.createElement('input');
+        const japaneseInput = document.createElement('input');
+        const kindSelect = document.createElement('select');
+        const addBtn = document.createElement('button');
+        const tableWrap = document.createElement('div');
+        const table = document.createElement('table');
+        const thead = document.createElement('thead');
+        const tbody = document.createElement('tbody');
+        const headerRow = document.createElement('tr');
+
+        page.className = 'hitomi-name-map-page';
+        header.className = 'hitomi-name-map-header';
+        status.className = 'hitomi-name-map-status';
+        notice.className = 'hitomi-name-map-notice';
+        controls.className = 'hitomi-name-map-controls';
+        addForm.className = 'hitomi-name-map-add-form';
+        tableWrap.className = 'hitomi-name-map-table-wrap';
+        table.className = 'hitomi-name-map-table';
+
+        title.textContent = 'Name Map';
+        status.textContent = `${countNameMapEntries()} entries`;
+        notice.textContent = 'Imports replace the entire map. Manual edits here are lost on the next external dictionary import, so keep permanent fixes in the external dictionary too.';
+
+        searchInput.type = 'search';
+        searchInput.placeholder = 'Search romaji or Japanese name';
+        exportBtn.type = 'button';
+        exportBtn.textContent = 'Export';
+        importBtn.type = 'button';
+        importBtn.textContent = 'Import';
+
+        romajiInput.type = 'text';
+        romajiInput.placeholder = 'romaji';
+        japaneseInput.type = 'text';
+        japaneseInput.placeholder = 'Japanese name';
+        addBtn.type = 'submit';
+        addBtn.textContent = 'Add';
+        for (const kind of ['group', 'author']) {
+            const option = document.createElement('option');
+            option.value = kind;
+            option.textContent = kind;
+            kindSelect.appendChild(option);
+        }
+
+        ['romaji', 'Japanese name', 'kind', ''].forEach(label => {
+            const th = document.createElement('th');
+            th.textContent = label;
+            headerRow.appendChild(th);
+        });
+
+        function setStatus(text) {
+            status.textContent = text;
+        }
+
+        function downloadNameMap() {
+            const blob = new Blob([JSON.stringify(nameMap, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'hitomi-tweak-name-map-backup.json';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        function getFilteredEntries() {
+            const query = searchInput.value.trim().toLowerCase();
+            return getNameMapEntries().filter(entry => !query
+                || entry.romaji.toLowerCase().includes(query)
+                || entry.japanese.toLowerCase().includes(query));
+        }
+
+        function renderTable() {
+            const entries = getFilteredEntries();
+            tbody.replaceChildren(...entries.map(entry => {
+                const tr = document.createElement('tr');
+                const romajiTd = document.createElement('td');
+                const japaneseTd = document.createElement('td');
+                const kindTd = document.createElement('td');
+                const actionTd = document.createElement('td');
+                const deleteBtn = document.createElement('button');
+
+                romajiTd.textContent = entry.romaji;
+                japaneseTd.textContent = entry.japanese;
+                japaneseTd.className = 'hitomi-name-map-editable';
+                japaneseTd.title = 'Click to edit';
+                kindTd.textContent = entry.kind;
+                deleteBtn.type = 'button';
+                deleteBtn.textContent = 'Delete';
+
+                japaneseTd.addEventListener('click', () => {
+                    if (japaneseTd.querySelector('input')) return;
+
+                    const input = document.createElement('input');
+                    let canceled = false;
+                    input.type = 'text';
+                    input.value = entry.japanese;
+                    japaneseTd.replaceChildren(input);
+                    input.focus();
+                    input.select();
+
+                    input.addEventListener('keydown', event => {
+                        if (event.key === 'Enter') {
+                            event.preventDefault();
+                            input.blur();
+                        } else if (event.key === 'Escape') {
+                            canceled = true;
+                            renderTable();
+                        }
+                    });
+
+                    input.addEventListener('blur', async () => {
+                        if (canceled) return;
+
+                        const nextValue = input.value.trim();
+                        if (!nextValue) {
+                            setStatus('Japanese name is required.');
+                            renderTable();
+                            return;
+                        }
+
+                        if (nextValue !== entry.japanese) {
+                            const nextMap = normalizeNameMap(nameMap);
+                            nextMap[entry.kind][entry.romaji] = nextValue;
+                            await saveNameMap(nextMap);
+                            setStatus(`Updated ${entry.romaji}`);
+                        }
+                        renderTable();
+                    }, { once: true });
+                });
+
+                deleteBtn.addEventListener('click', async () => {
+                    const nextMap = normalizeNameMap(nameMap);
+                    delete nextMap[entry.kind][entry.romaji];
+                    await saveNameMap(nextMap);
+                    setStatus(`Deleted ${entry.romaji}. ${countNameMapEntries()} entries`);
+                    renderTable();
+                });
+
+                actionTd.appendChild(deleteBtn);
+                tr.append(romajiTd, japaneseTd, kindTd, actionTd);
+                return tr;
+            }));
+
+            if (!entries.length) {
+                const tr = document.createElement('tr');
+                const td = document.createElement('td');
+                td.colSpan = 4;
+                td.textContent = 'No entries found.';
+                tr.appendChild(td);
+                tbody.appendChild(tr);
+            }
+        }
+
+        exportBtn.addEventListener('click', downloadNameMap);
+        importBtn.addEventListener('click', () => {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.json,application/json';
+            input.addEventListener('change', async () => {
+                if (!input.files.length) return;
+
+                const beforeCount = countNameMapEntries();
+                try {
+                    const imported = normalizeNameMap(JSON.parse(await input.files[0].text()));
+                    await saveNameMap(imported);
+                    const afterCount = countNameMapEntries();
+                    setStatus(`${beforeCount} -> ${afterCount} entries`);
+                    renderTable();
+                } catch (e) {
+                    setStatus('Invalid name map format.');
+                }
+            });
+            input.click();
+        });
+        searchInput.addEventListener('input', renderTable);
+
+        addForm.addEventListener('submit', async event => {
+            event.preventDefault();
+
+            const romaji = normalizeNameMapKey(romajiInput.value);
+            const japanese = japaneseInput.value.trim();
+            const kind = kindSelect.value;
+            if (!romaji || !japanese || !['group', 'author'].includes(kind)) {
+                setStatus('Romaji, Japanese name, and kind are required.');
+                return;
+            }
+
+            const nextMap = normalizeNameMap(nameMap);
+            const existed = Object.prototype.hasOwnProperty.call(nextMap[kind], romaji);
+            nextMap[kind][romaji] = japanese;
+            await saveNameMap(nextMap);
+            romajiInput.value = '';
+            japaneseInput.value = '';
+            setStatus(`${existed ? 'Updated' : 'Added'} ${romaji}. ${countNameMapEntries()} entries`);
+            renderTable();
+        });
+
+        header.append(title, status);
+        controls.append(searchInput, exportBtn, importBtn);
+        addForm.append(romajiInput, japaneseInput, kindSelect, addBtn);
+        thead.appendChild(headerRow);
+        table.append(thead, tbody);
+        tableWrap.appendChild(table);
+        page.append(header, notice, controls, addForm, tableWrap);
+        document.body.appendChild(page);
+        renderTable();
     }
 
     function getDownloadKey() {
@@ -2263,6 +2634,10 @@
     }
 
     async function main() {
+        if (isNameMapPage()) {
+            await renderNameMapPage();
+            return;
+        }
         if (isDownloadHistoryPage()) return;
         if (await maybeRedirectToPreferredLanguage()) return;
 
