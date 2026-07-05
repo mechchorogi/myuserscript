@@ -38,6 +38,15 @@
     const blacklistKeys = ['author', 'language', 'series', 'tag', 'title', 'type'];
     const downloadHistoryKey = 'hitomi-tweak-download-history';
     const foldedBookIdsKey = 'hitomi-tweak-folded-book-ids';
+    const preferredLanguageKey = 'hitomi-tweak-preferred-language';
+    const preferredLanguageOptions = [
+        ['off', 'Off'],
+        ['japanese', 'Japanese'],
+        ['english', 'English'],
+        ['chinese', 'Chinese'],
+        ['korean', 'Korean'],
+        ['all', 'All']
+    ];
     const maxListDownloadCount = 4;
     const downloadProgressStackClassName = 'hitomi-tweak-download-progress-stack';
     const downloadProgressClassName = 'hitomi-tweak-download-progress';
@@ -57,7 +66,7 @@
     // displayed shortcuts do not drift from the actual behavior.
     const keyboardShortcuts = [
         ['/', 'Toggle this help'],
-        ['b', 'Toggle blacklist mode'],
+        ['b', 'Toggle blocklist mode'],
         ['d', 'Download current book (up to 4 on list pages)'],
         ['j', 'Focus next book'],
         ['k', 'Focus previous book'],
@@ -82,8 +91,46 @@
         return location.pathname.startsWith('/reader/');
     }
 
+    function isDownloadHistoryPage() {
+        // hitomi-download-history.user.js owns the whole document body on this
+        // page, so hitomi-tweak.user.js must not install its own panel/filter UI.
+        return location.pathname === '/hitomi-tweak-history.html';
+    }
+
     function blacklistStorageKey(key) {
         return `hitomi-tweak-blacklist-${key}`;
+    }
+
+    function normalizePreferredLanguage(value) {
+        return preferredLanguageOptions.some(([option]) => option === value) ? value : 'off';
+    }
+
+    async function loadPreferredLanguage() {
+        return normalizePreferredLanguage(await GM.getValue(preferredLanguageKey, 'off'));
+    }
+
+    function getPreferredLanguageRedirectPath(pathname, language) {
+        if (language === 'off') return null;
+
+        if (pathname === '/') {
+            return `/index-${language}.html`;
+        }
+
+        const redirectPath = pathname.replace(
+            /^\/(artist|tag|series|character|group|type)\/(.+)-all\.html$/,
+            `/$1/$2-${language}.html`
+        );
+
+        return redirectPath === pathname ? null : redirectPath;
+    }
+
+    async function maybeRedirectToPreferredLanguage() {
+        const language = await loadPreferredLanguage();
+        const redirectPath = getPreferredLanguageRedirectPath(location.pathname, language);
+        if (!redirectPath) return false;
+
+        window.location.replace(new URL(redirectPath, location.href).href);
+        return true;
     }
 
     function getBookIdFromElement(elem) {
@@ -674,7 +721,50 @@
         });
 
         const form = document.createElement('div');
+        const preferredLanguageRow = document.createElement('div');
+        const preferredLanguageLabel = document.createElement('label');
+        const preferredLanguageSelect = document.createElement('select');
         let saveTimer = null;
+
+        Object.assign(preferredLanguageRow.style, {
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '4px',
+            marginBottom: '12px'
+        });
+
+        preferredLanguageLabel.textContent = 'Preferred Language:';
+        preferredLanguageLabel.htmlFor = 'hitomi-tweak-preferred-language-select';
+
+        preferredLanguageSelect.id = preferredLanguageLabel.htmlFor;
+        preferredLanguageSelect.style.width = '100%';
+        // This setting is intentionally saved before redirect behavior exists. Keeping
+        // the first step inert makes the later hitomi-redirect merge easier to verify.
+        for (const [value, label] of preferredLanguageOptions) {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            preferredLanguageSelect.appendChild(option);
+        }
+        preferredLanguageSelect.value = await loadPreferredLanguage();
+        preferredLanguageSelect.addEventListener('change', () => {
+            GM.setValue(preferredLanguageKey, preferredLanguageSelect.value).catch(() => {});
+        });
+
+        preferredLanguageRow.append(preferredLanguageLabel, preferredLanguageSelect);
+        form.appendChild(preferredLanguageRow);
+
+        // Preferred language redirects to a language page; the blocklist below folds
+        // books by condition. Separate them visually so they don't read as one setting.
+        const blocklistHeading = document.createElement('div');
+        blocklistHeading.textContent = 'Blocklist';
+        Object.assign(blocklistHeading.style, {
+            fontWeight: 'bold',
+            marginTop: '12px',
+            paddingTop: '12px',
+            borderTop: '1px solid rgba(0, 0, 0, 0.3)'
+        });
+        form.appendChild(blocklistHeading);
 
         for (const key of blacklistKeys) {
             const label = document.createElement('label');
@@ -757,7 +847,7 @@
         });
 
         filterMarkModeButton = document.createElement('button');
-        filterMarkModeButton.textContent = 'Blacklist Mode';
+        filterMarkModeButton.textContent = 'Blocklist Mode';
         filterMarkModeButton.dataset.active = 'false';
 
         const markModeRow = document.createElement('div');
@@ -803,7 +893,7 @@
         });
 
         const toggleLabel = document.createElement('label');
-        toggleLabel.textContent = 'Filter Enabled';
+        toggleLabel.textContent = 'Blocklist Enabled';
         toggleLabel.htmlFor = 'hitomi-tweak-filter-enabled-toggle';
         Object.assign(toggleLabel.style, {
             flex: '1',
@@ -2057,6 +2147,9 @@
     }
 
     async function main() {
+        if (isDownloadHistoryPage()) return;
+        if (await maybeRedirectToPreferredLanguage()) return;
+
         installStyles();
         document.addEventListener('keydown', handleGlobalKeydown);
 

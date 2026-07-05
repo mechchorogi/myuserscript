@@ -45,19 +45,47 @@
         return text?.replace(/\s+/g, ' ').trim() || '';
     }
 
-    function findLanguageLink() {
-        return Array.from(document.querySelectorAll('a'))
-            .find(link => normalizeText(link.textContent).toLowerCase() === 'language');
+    function installNavLinkStyle() {
+        const styleId = 'hitomi-download-history-nav-link-style';
+        if (document.getElementById(styleId)) return;
+
+        // The navbar is a fixed max-width row that already fits logo + nav + search
+        // box tightly. Shrinking only our added item didn't free enough width to
+        // stop the search box from being pushed out of place, so shrink the whole
+        // nav (native items included) instead. `.navbar nav` and
+        // `.navbar nav > ul > li > a` both out-specificity the site's own
+        // `nav` / `nav > ul > li > a` rules, so no !important is needed.
+        const style = document.createElement('style');
+        style.id = styleId;
+        style.textContent = `
+            .navbar nav {
+                font-size: 14px;
+            }
+            .navbar nav > ul > li > a {
+                padding: 10px 10px;
+            }
+        `;
+        document.head.appendChild(style);
     }
 
     function installHeaderHistoryLink() {
-        const languageLink = findLanguageLink();
-        if (!languageLink) return;
+        // The header's own LANGUAGE dropdown is managed by page scripts that differ
+        // by page type (e.g. list pages load language_support.js, gallery pages
+        // don't), so repurposing that link is unreliable and also removes native
+        // language switching now that hitomi-tweak.user.js has its own preferred
+        // language setting. Add an independent nav item instead.
+        const navList = document.querySelector('.navbar nav ul');
+        if (!navList || navList.querySelector('.hitomi-download-history-nav-link')) return;
 
-        // hitomi-redirect.user.js already forces Japanese pages, so reuse the obsolete
-        // LANGUAGE navigation slot for the standalone download history page.
-        languageLink.href = new URL(historyPagePath, location.origin).href;
-        languageLink.textContent = 'DL HISTORY';
+        installNavLinkStyle();
+
+        const li = document.createElement('li');
+        const link = document.createElement('a');
+        link.className = 'hitomi-download-history-nav-link';
+        link.href = new URL(historyPagePath, location.origin).href;
+        link.textContent = 'DL HISTORY';
+        li.appendChild(link);
+        navList.appendChild(li);
     }
 
     function loadJsonStorage(key, fallback) {
