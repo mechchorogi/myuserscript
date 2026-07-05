@@ -64,7 +64,7 @@
     let focusedBook = null;
     let foldedBookIds = new Set();
     let helpOverlay = null;
-    let isHandlingDownload = false;
+    let activeBookPageDownload = null;
     let activeListDownloads = new Map();
     let galleryInfoLoadQueue = Promise.resolve();
     let listDownloadNotice = null;
@@ -899,6 +899,66 @@
         return true;
     }
 
+    function getDLButtonText() {
+        return document.querySelector('a#dl-button > h1')?.textContent || 'DOWNLOAD';
+    }
+
+    function setDLButtonText(text) {
+        const heading = document.querySelector('a#dl-button > h1');
+        if (!heading) return false;
+
+        heading.textContent = text;
+        return true;
+    }
+
+    function getPageJQuery() {
+        return unsafeWindow.jQuery || unsafeWindow.$;
+    }
+
+    function showBookPageDownloadProgress() {
+        const $ = getPageJQuery();
+        const progressbar = document.querySelector('#progressbar');
+        const dlButton = getDLButton();
+
+        if ($ && progressbar && typeof $(progressbar).progressbar === 'function') {
+            $(dlButton).hide();
+            $(progressbar).show();
+            $(progressbar).progressbar({ value: false });
+            return;
+        }
+
+        if (dlButton) dlButton.style.display = 'none';
+        if (progressbar) progressbar.style.display = '';
+    }
+
+    function updateBookPageDownloadProgress(percent) {
+        const $ = getPageJQuery();
+        const progressbar = document.querySelector('#progressbar');
+
+        if ($ && progressbar && typeof $(progressbar).progressbar === 'function') {
+            $(progressbar).progressbar('value', Math.max(0, Math.min(100, percent)));
+        }
+    }
+
+    function hideBookPageDownloadProgress() {
+        const $ = getPageJQuery();
+        const progressbar = document.querySelector('#progressbar');
+        const dlButton = getDLButton();
+
+        if ($) {
+            if (progressbar) $(progressbar).hide();
+            if (dlButton) $(dlButton).show();
+            return;
+        }
+
+        if (progressbar) progressbar.style.display = 'none';
+        if (dlButton) dlButton.style.display = '';
+    }
+
+    function getCurrentGalleryId() {
+        return location.pathname.replace(/\.[^/.]+$/, '').match(/(\d+)$/)?.[1] || null;
+    }
+
     function syncDownloadHistoryEntry(key, entry) {
         loadDownloadHistory()
             .then(history => {
@@ -983,16 +1043,95 @@
         }
     }
 
-    function downloadBook(dlButton) {
-        if (!dlButton || isHandlingDownload) return false;
+    function createBookPageDownloadState() {
+        return {
+            canceled: false,
+            cancelWait: null,
+            previousText: getDLButtonText(),
+            xhr: null
+        };
+    }
 
-        isHandlingDownload = true;
+    function restoreDLButtonTextWhenIdle(downloadState, delay) {
+        window.setTimeout(() => {
+            if (activeBookPageDownload !== downloadState) {
+                setDLButtonText(downloadState.previousText);
+            }
+        }, delay);
+    }
+
+    function cancelBookPageDownload(downloadState) {
+        downloadState.canceled = true;
+        downloadState.cancelWait?.();
+        downloadState.xhr?.abort();
+        hideBookPageDownloadProgress();
+        setDLButtonText('CANCELED');
+        restoreDLButtonTextWhenIdle(downloadState, 1000);
+    }
+
+    async function downloadBook(dlButton) {
+        if (!dlButton) return false;
+
+        if (activeBookPageDownload) {
+            cancelBookPageDownload(activeBookPageDownload);
+            return false;
+        }
+
+        const galleryId = getCurrentGalleryId();
+        if (!galleryId) return false;
+
+        const downloadState = createBookPageDownloadState();
+        activeBookPageDownload = downloadState;
         try {
+            showBookPageDownloadProgress();
+            const [gg, galleryInfo] = await Promise.all([
+                waitForHitomiGg(),
+                loadCurrentBookPageGalleryInfo(galleryId, downloadState)
+            ]);
+            throwIfDownloadCanceled(downloadState);
+
+            if (galleryInfo.type === 'anime') {
+                hideBookPageDownloadProgress();
+                setDLButtonText('ANIME NOT SUPPORTED');
+                restoreDLButtonTextWhenIdle(downloadState, 1800);
+                return false;
+            }
+
+            const zip = new JSZip();
+            const title = sanitizeFileName(galleryInfo.japanese_title || galleryInfo.title || `hitomi-${galleryId}`);
+
+            for (let i = 0; i < galleryInfo.files.length; i++) {
+                const image = galleryInfo.files[i];
+                const url = urlFromUrlFromHash(image, 'webp', 'webp', undefined, gg);
+                const imageName = image.name.replace(/[^.]*$/, 'webp');
+
+                zip.file(imageName, await retryDownloadBlob(url, downloadState), { binary: true });
+                updateBookPageDownloadProgress((i + 1) / galleryInfo.files.length * 100);
+                await wait(1000, downloadState);
+            }
+
+            throwIfDownloadCanceled(downloadState);
+            const zipBlob = await zip.generateAsync({ type: 'blob' });
+            throwIfDownloadCanceled(downloadState);
+            saveAs(zipBlob, `${title}.zip`);
+            throwIfDownloadCanceled(downloadState);
+            hideBookPageDownloadProgress();
             markCurrentBookDownloaded();
-            dlButton.click();
             return true;
+        } catch (e) {
+            if (isDownloadCanceledError(e)) {
+                return false;
+            }
+
+            console.error(e);
+            hideBookPageDownloadProgress();
+            setDLButtonText('DOWNLOAD FAILED');
+            restoreDLButtonTextWhenIdle(downloadState, 1800);
+            return false;
         } finally {
-            isHandlingDownload = false;
+            if (activeBookPageDownload === downloadState) {
+                activeBookPageDownload = null;
+            }
         }
     }
 
@@ -1173,6 +1312,18 @@
 
         galleryInfoLoadQueue = task.catch(() => {});
         return task;
+    }
+
+    async function loadCurrentBookPageGalleryInfo(galleryId, downloadState) {
+        for (let i = 0; i < 50; i++) {
+            throwIfDownloadCanceled(downloadState);
+            if (unsafeWindow.galleryinfo?.id && String(unsafeWindow.galleryinfo.id) === String(galleryId)) {
+                return unsafeWindow.galleryinfo;
+            }
+            await wait(100, downloadState);
+        }
+
+        return loadGalleryInfo(galleryId);
     }
 
     function subdomainFromUrl(url, base, dir, gg) {
@@ -1378,7 +1529,7 @@
 
     function installDownloadNavigationGuard() {
         window.addEventListener('beforeunload', e => {
-            if (activeListDownloads.size === 0) return;
+            if (!activeBookPageDownload && activeListDownloads.size === 0) return;
 
             e.preventDefault();
             e.returnValue = '';
@@ -1390,8 +1541,6 @@
         if (!dlButton) return;
 
         dlButton.addEventListener('click', () => {
-            if (isHandlingDownload) return;
-
             markCurrentBookDownloaded();
         }, true);
     }
