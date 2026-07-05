@@ -38,6 +38,7 @@
     const blacklistKeys = ['author', 'language', 'series', 'tag', 'title', 'type'];
     const downloadHistoryKey = 'hitomi-tweak-download-history';
     const foldedBookIdsKey = 'hitomi-tweak-folded-book-ids';
+    const nameMapKey = 'hitomi-tweak-name-map';
     const preferredLanguageKey = 'hitomi-tweak-preferred-language';
     const preferredLanguageOptions = [
         ['off', 'Off'],
@@ -86,6 +87,7 @@
     let galleryInfoLoadQueue = Promise.resolve();
     let listDownloadNotice = null;
     let listDownloadProgressStack = null;
+    let nameMap = { version: 1, group: {}, author: {} };
 
     function isReaderPage() {
         return location.pathname.startsWith('/reader/');
@@ -99,6 +101,69 @@
 
     function blacklistStorageKey(key) {
         return `hitomi-tweak-blacklist-${key}`;
+    }
+
+    function normalizeNameMapKey(value) {
+        return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    }
+
+    function isPlainObject(value) {
+        return value && typeof value === 'object' && !Array.isArray(value);
+    }
+
+    function normalizeNameMap(input) {
+        if (!isPlainObject(input) || input.version !== 1 || !isPlainObject(input.group) || !isPlainObject(input.author)) {
+            throw new Error('Invalid name map format');
+        }
+
+        const normalized = { version: 1, group: {}, author: {} };
+        for (const kind of ['group', 'author']) {
+            for (const [key, value] of Object.entries(input[kind])) {
+                const normalizedKey = normalizeNameMapKey(key);
+                if (normalizedKey && typeof value === 'string') {
+                    normalized[kind][normalizedKey] = value.trim();
+                }
+            }
+        }
+        return normalized;
+    }
+
+    function loadLocalNameMap() {
+        try {
+            return normalizeNameMap(JSON.parse(localStorage.getItem(nameMapKey) || 'null'));
+        } catch (e) {
+            return { version: 1, group: {}, author: {} };
+        }
+    }
+
+    function saveLocalNameMap(map) {
+        try {
+            localStorage.setItem(nameMapKey, JSON.stringify(map));
+        } catch (e) {
+            // Name-map mirroring is best-effort; GM storage remains the canonical copy.
+        }
+    }
+
+    async function loadNameMap() {
+        const localMap = loadLocalNameMap();
+        try {
+            nameMap = normalizeNameMap(await GM.getValue(nameMapKey, localMap));
+        } catch (e) {
+            nameMap = localMap;
+        }
+        saveLocalNameMap(nameMap);
+        return nameMap;
+    }
+
+    async function saveNameMap(map) {
+        nameMap = normalizeNameMap(map);
+        saveLocalNameMap(nameMap);
+        await GM.setValue(nameMapKey, nameMap);
+    }
+
+    function resolveJapaneseName(name, kind) {
+        const normalized = normalizeNameMapKey(name);
+        return (kind === 'group' || kind === 'author') && normalized ? nameMap[kind]?.[normalized] || name : name;
     }
 
     function normalizePreferredLanguage(value) {
@@ -757,13 +822,49 @@
         // Preferred language redirects to a language page; the blocklist below folds
         // books by condition. Separate them visually so they don't read as one setting.
         const blocklistHeading = document.createElement('div');
-        blocklistHeading.textContent = 'Blocklist';
+        const blocklistHeadingText = document.createElement('label');
+        const toggleCheckbox = document.createElement('input');
+        const toggleSwitch = document.createElement('label');
+        const toggleSlider = document.createElement('span');
+
+        blocklistHeadingText.textContent = 'Blocklist';
+        blocklistHeadingText.htmlFor = 'hitomi-tweak-filter-enabled-toggle';
+        Object.assign(blocklistHeadingText.style, {
+            cursor: 'pointer',
+            userSelect: 'none'
+        });
+
+        toggleCheckbox.id = blocklistHeadingText.htmlFor;
+        toggleCheckbox.className = 'hitomi-switch-input';
+        toggleCheckbox.type = 'checkbox';
+        toggleCheckbox.checked = filterEnabled;
+        toggleCheckbox.setAttribute('aria-label', 'Blocklist enabled');
+        toggleCheckbox.addEventListener('change', () => {
+            filterEnabled = toggleCheckbox.checked;
+            if (filterEnabled) {
+                loadBlacklist().then(refreshFilter);
+            } else {
+                clearFilter();
+            }
+        });
+
+        toggleSwitch.className = 'hitomi-switch';
+        toggleSwitch.htmlFor = toggleCheckbox.id;
+
+        toggleSlider.className = 'hitomi-switch-slider';
+        toggleSwitch.append(toggleCheckbox, toggleSlider);
+
         Object.assign(blocklistHeading.style, {
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '10px',
             fontWeight: 'bold',
             marginTop: '12px',
             paddingTop: '12px',
             borderTop: '1px solid rgba(0, 0, 0, 0.3)'
         });
+        blocklistHeading.append(blocklistHeadingText, toggleSwitch);
         form.appendChild(blocklistHeading);
 
         for (const key of blacklistKeys) {
@@ -794,6 +895,12 @@
 
         const importBtn = document.createElement('button');
         importBtn.textContent = 'Import';
+
+        const nameMapExportBtn = document.createElement('button');
+        nameMapExportBtn.textContent = 'Export';
+
+        const nameMapImportBtn = document.createElement('button');
+        nameMapImportBtn.textContent = 'Import';
 
         exportBtn.addEventListener('click', async () => {
             const data = {};
@@ -836,6 +943,35 @@
             input.click();
         });
 
+        nameMapExportBtn.addEventListener('click', async () => {
+            const data = normalizeNameMap(await GM.getValue(nameMapKey, nameMap));
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'hitomi-tweak-name-map-backup.json';
+            a.click();
+            URL.revokeObjectURL(url);
+        });
+
+        nameMapImportBtn.addEventListener('click', () => {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.json,application/json';
+            input.addEventListener('change', async () => {
+                if (!input.files.length) return;
+
+                const text = await input.files[0].text();
+                try {
+                    await saveNameMap(JSON.parse(text));
+                    alert('Name map imported');
+                } catch (e) {
+                    alert('Invalid name map format');
+                }
+            });
+            input.click();
+        });
+
         panel.appendChild(form);
 
         const buttonRow = document.createElement('div');
@@ -864,7 +1000,23 @@
         });
         backupRow.append(exportBtn, importBtn);
 
-        buttonRow.append(markModeRow, backupRow);
+        const nameMapHeading = document.createElement('div');
+        nameMapHeading.textContent = 'Name Map';
+        Object.assign(nameMapHeading.style, {
+            fontWeight: 'bold',
+            marginTop: '2px',
+            paddingTop: '12px',
+            borderTop: '1px solid rgba(0, 0, 0, 0.3)'
+        });
+
+        const nameMapBackupRow = document.createElement('div');
+        Object.assign(nameMapBackupRow.style, {
+            display: 'flex',
+            gap: '10px'
+        });
+        nameMapBackupRow.append(nameMapExportBtn, nameMapImportBtn);
+
+        buttonRow.append(markModeRow, backupRow, nameMapHeading, nameMapBackupRow);
         panel.appendChild(buttonRow);
 
         for (const key of blacklistKeys) {
@@ -882,49 +1034,6 @@
                 document.body.removeEventListener('click', blacklistClickHandler, true);
             }
         });
-
-        const toggleRow = document.createElement('div');
-        Object.assign(toggleRow.style, {
-            marginTop: '16px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '10px'
-        });
-
-        const toggleLabel = document.createElement('label');
-        toggleLabel.textContent = 'Blocklist Enabled';
-        toggleLabel.htmlFor = 'hitomi-tweak-filter-enabled-toggle';
-        Object.assign(toggleLabel.style, {
-            flex: '1',
-            cursor: 'pointer',
-            userSelect: 'none'
-        });
-
-        const toggleCheckbox = document.createElement('input');
-        toggleCheckbox.id = 'hitomi-tweak-filter-enabled-toggle';
-        toggleCheckbox.className = 'hitomi-switch-input';
-        toggleCheckbox.type = 'checkbox';
-        toggleCheckbox.checked = filterEnabled;
-        toggleCheckbox.addEventListener('change', () => {
-            filterEnabled = toggleCheckbox.checked;
-            if (filterEnabled) {
-                loadBlacklist().then(refreshFilter);
-            } else {
-                clearFilter();
-            }
-        });
-
-        const toggleSwitch = document.createElement('label');
-        toggleSwitch.className = 'hitomi-switch';
-        toggleSwitch.htmlFor = toggleCheckbox.id;
-
-        const toggleSlider = document.createElement('span');
-        toggleSlider.className = 'hitomi-switch-slider';
-
-        toggleSwitch.append(toggleCheckbox, toggleSlider);
-        toggleRow.append(toggleLabel, toggleSwitch);
-        panel.appendChild(toggleRow);
 
         document.body.appendChild(panel);
     }
@@ -1113,7 +1222,7 @@
             const cells = Array.from(row.children);
             if (normalizeMetadataText(cells[0]?.textContent).toLowerCase() === 'group') {
                 const group = normalizeMetadataText(cells[1]?.textContent);
-                if (!isMissingMetadataValue(group)) return group;
+                if (!isMissingMetadataValue(group)) return resolveJapaneseName(group, 'group');
             }
         }
 
@@ -1121,17 +1230,22 @@
         const groupLabel = labels.find(label => normalizeMetadataText(label.textContent).toLowerCase() === 'group');
         if (groupLabel) {
             const group = normalizeMetadataText(groupLabel.nextElementSibling?.textContent);
-            if (!isMissingMetadataValue(group)) return group;
+            if (!isMissingMetadataValue(group)) return resolveJapaneseName(group, 'group');
         }
 
-        return getGalleryInfoNames(galleryInfo?.groups, 'group').join(', ');
+        return getGalleryInfoNames(galleryInfo?.groups, 'group')
+            .map(group => resolveJapaneseName(group, 'group'))
+            .join(', ');
     }
 
     function getBookPageAuthors(root, galleryInfo) {
         const authorText = getMetadataListText(root, 'h2#artists');
         const authorNames = isMissingMetadataValue(authorText) ? getGalleryInfoNames(galleryInfo?.artists, 'artist') : authorText.split(',');
 
-        const names = authorNames.map(name => normalizeMetadataText(name)).filter(Boolean);
+        const names = authorNames
+            .map(name => normalizeMetadataText(name))
+            .filter(Boolean)
+            .map(name => resolveJapaneseName(name, 'author'));
         return [...new Set(names)];
     }
 
@@ -2160,6 +2274,7 @@
             return;
         }
 
+        await loadNameMap();
         installEnhancer();
         installDownloadNavigationGuard();
         installHistory();

@@ -18,6 +18,7 @@
 
     const historyPagePath = '/hitomi-tweak-history.html';
     const downloadHistoryKey = 'hitomi-tweak-download-history';
+    const nameMapKey = 'hitomi-tweak-name-map';
     const metadataFetchDelayMs = 1200;
     const selectedRowClassName = 'hitomi-download-history-selected-row';
     const sortIndicatorClassName = 'hitomi-download-history-sort-indicator';
@@ -35,6 +36,7 @@
     let statusElem = null;
     let tbodyElem = null;
     let headerElems = new Map();
+    let nameMap = { version: 1, group: {}, author: {} };
 
     if (location.pathname !== historyPagePath) {
         installHeaderHistoryLink();
@@ -103,6 +105,50 @@
         } catch (e) {
             // History write failures should not block viewing already loaded entries.
         }
+    }
+
+    function normalizeNameMapKey(value) {
+        return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    }
+
+    function isPlainObject(value) {
+        return value && typeof value === 'object' && !Array.isArray(value);
+    }
+
+    function normalizeNameMap(input) {
+        if (!isPlainObject(input) || input.version !== 1 || !isPlainObject(input.group) || !isPlainObject(input.author)) {
+            return { version: 1, group: {}, author: {} };
+        }
+
+        const normalized = { version: 1, group: {}, author: {} };
+        for (const kind of ['group', 'author']) {
+            for (const [key, value] of Object.entries(input[kind])) {
+                const normalizedKey = normalizeNameMapKey(key);
+                if (normalizedKey && typeof value === 'string') {
+                    normalized[kind][normalizedKey] = value.trim();
+                }
+            }
+        }
+        return normalized;
+    }
+
+    function loadNameMap() {
+        nameMap = normalizeNameMap(loadJsonStorage(nameMapKey, {}));
+        return nameMap;
+    }
+
+    function resolveJapaneseName(name, kind) {
+        const normalized = normalizeNameMapKey(name);
+        return (kind === 'group' || kind === 'author') && normalized ? nameMap[kind]?.[normalized] || name : name;
+    }
+
+    function resolveJapaneseNameList(text, kind) {
+        return normalizeText(text)
+            .split(',')
+            .map(name => normalizeText(name))
+            .filter(Boolean)
+            .map(name => resolveJapaneseName(name, kind))
+            .join(', ');
     }
 
     function getBookIdFromText(text) {
@@ -189,7 +235,14 @@
             if (!Number.isNaN(left) && !Number.isNaN(right) && left !== right) return left - right;
         }
 
-        return String(a[key] || '').localeCompare(String(b[key] || ''), undefined, { numeric: true, sensitivity: 'base' });
+        return getDisplayValue(a, key).localeCompare(getDisplayValue(b, key), undefined, { numeric: true, sensitivity: 'base' });
+    }
+
+    function getDisplayValue(row, key) {
+        if (key === 'group') return resolveJapaneseNameList(row.group, 'group');
+        if (key === 'author') return resolveJapaneseNameList(row.author, 'author');
+        if (key === 'downloadedAt') return formatDownloadedAt(row.downloadedAt);
+        return String(row[key] || '');
     }
 
     function sortRows() {
@@ -266,7 +319,7 @@
                     link.textContent = row.bookId || row.url;
                     td.appendChild(link);
                 } else {
-                    td.textContent = column.key === 'downloadedAt' ? formatDownloadedAt(row.downloadedAt) : row[column.key] || '';
+                    td.textContent = getDisplayValue(row, column.key);
                 }
                 tr.appendChild(td);
             });
@@ -552,6 +605,7 @@
     }
 
     function init() {
+        loadNameMap();
         const history = loadJsonStorage(downloadHistoryKey, {});
 
         rows = createRowsFromHistory(history);
