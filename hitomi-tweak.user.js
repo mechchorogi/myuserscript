@@ -959,6 +959,97 @@
         return location.pathname.replace(/\.[^/.]+$/, '').match(/(\d+)$/)?.[1] || null;
     }
 
+    function normalizeMetadataText(text) {
+        return text?.replace(/\s+/g, ' ').trim() || '';
+    }
+
+    function isMissingMetadataValue(value) {
+        return !value || value.toLowerCase() === 'n/a';
+    }
+
+    function getMetadataListText(root, headingSelector) {
+        return normalizeMetadataText(Array.from(root.querySelectorAll(`${headingSelector} a`), link => link.textContent.trim())
+            .filter(Boolean)
+            .join(', ') || root.querySelector(headingSelector)?.textContent);
+    }
+
+    function getGalleryInfoNames(values, key) {
+        if (!Array.isArray(values)) return [];
+
+        return values
+            .map(value => normalizeMetadataText(typeof value === 'string' ? value : value?.[key] || value?.name))
+            .filter(Boolean);
+    }
+
+    function getBookPageTitle(root, galleryInfo, galleryId) {
+        return normalizeMetadataText(root.querySelector('h1#gallery-brand > a')?.textContent)
+            || galleryInfo?.japanese_title
+            || galleryInfo?.title
+            || `hitomi-${galleryId}`;
+    }
+
+    function getBookPageGroup(root, galleryInfo) {
+        const tableRows = Array.from(root.querySelectorAll('table tr'));
+        for (const row of tableRows) {
+            const cells = Array.from(row.children);
+            if (normalizeMetadataText(cells[0]?.textContent).toLowerCase() === 'group') {
+                const group = normalizeMetadataText(cells[1]?.textContent);
+                if (!isMissingMetadataValue(group)) return group;
+            }
+        }
+
+        const labels = Array.from(root.querySelectorAll('dt, th, td, h2, h3, strong, b'));
+        const groupLabel = labels.find(label => normalizeMetadataText(label.textContent).toLowerCase() === 'group');
+        if (groupLabel) {
+            const group = normalizeMetadataText(groupLabel.nextElementSibling?.textContent);
+            if (!isMissingMetadataValue(group)) return group;
+        }
+
+        return getGalleryInfoNames(galleryInfo?.groups, 'group').join(', ');
+    }
+
+    function getBookPageAuthors(root, galleryInfo) {
+        const authorText = getMetadataListText(root, 'h2#artists');
+        const authorNames = isMissingMetadataValue(authorText) ? getGalleryInfoNames(galleryInfo?.artists, 'artist') : authorText.split(',');
+
+        const names = authorNames.map(name => normalizeMetadataText(name)).filter(Boolean);
+        return [...new Set(names)];
+    }
+
+    function formatDownloadFileNameFromMetadata({ group, authors, title }) {
+        const hasGroup = !isMissingMetadataValue(group);
+        const normalizedGroup = normalizeMetadataText(group);
+        const normalizedAuthors = authors.map(author => normalizeMetadataText(author)).filter(Boolean);
+        let authorPart = '';
+
+        if (normalizedAuthors.length === 1) {
+            [authorPart] = normalizedAuthors;
+        } else if (normalizedAuthors.length === 2) {
+            authorPart = normalizedAuthors.join(', ');
+        } else if (normalizedAuthors.length >= 3) {
+            authorPart = hasGroup ? 'various artists' : 'Various Artists';
+        }
+
+        let bracket = 'Unknown';
+        if (hasGroup && authorPart) {
+            bracket = `${normalizedGroup} (${authorPart})`;
+        } else if (hasGroup) {
+            bracket = normalizedGroup;
+        } else if (authorPart) {
+            bracket = authorPart;
+        }
+
+        return sanitizeFileName(`[${bracket}] ${title}`);
+    }
+
+    function getDownloadFileNameFromBookPageDocument(root, galleryInfo, galleryId) {
+        return formatDownloadFileNameFromMetadata({
+            group: getBookPageGroup(root, galleryInfo),
+            authors: getBookPageAuthors(root, galleryInfo),
+            title: getBookPageTitle(root, galleryInfo, galleryId)
+        });
+    }
+
     function syncDownloadHistoryEntry(key, entry) {
         loadDownloadHistory()
             .then(history => {
@@ -1098,7 +1189,7 @@
             }
 
             const zip = new JSZip();
-            const title = sanitizeFileName(galleryInfo.japanese_title || galleryInfo.title || `hitomi-${galleryId}`);
+            const title = getDownloadFileNameFromBookPageDocument(document, galleryInfo, galleryId);
 
             for (let i = 0; i < galleryInfo.files.length; i++) {
                 const image = galleryInfo.files[i];
@@ -1492,7 +1583,7 @@
             }
 
             const zip = new JSZip();
-            const title = sanitizeFileName(galleryInfo.japanese_title || galleryInfo.title || `hitomi-${galleryId}`);
+            const title = getDownloadFileNameFromBookPageDocument(document, galleryInfo, galleryId);
 
             for (let i = 0; i < galleryInfo.files.length; i++) {
                 const image = galleryInfo.files[i];
