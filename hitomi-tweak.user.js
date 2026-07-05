@@ -1448,6 +1448,10 @@
         if (books.length === 0) return false;
 
         const currentIndex = focusedBook ? books.indexOf(focusedBook) : -1;
+        if (currentIndex === -1) {
+            focusBook(books[books.length - 1]);
+            return true;
+        }
         if (currentIndex <= 0) return false;
 
         focusBook(books[currentIndex - 1]);
