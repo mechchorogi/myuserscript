@@ -37,9 +37,11 @@
     const downloadProgressClassName = 'hitomi-tweak-download-progress';
     const bookDownloadProgressClassName = 'hitomi-tweak-book-download-progress';
     const bookDownloadDoneClassName = 'hitomi-tweak-book-download-done';
+    const bookDownloadCanceledClassName = 'hitomi-tweak-book-download-canceled';
     const bookDownloadErrorClassName = 'hitomi-tweak-book-download-error';
     const bookDownloadProgressLabelClassName = 'hitomi-tweak-book-download-progress-label';
     const downloadedBookHeadingClassName = 'hitomi-tweak-downloaded-book-heading';
+    const downloadCanceledErrorName = 'HitomiTweakDownloadCanceled';
     const focusedBookClassName = 'hitomi-tweak-focused-book';
     const helpOverlayClassName = 'hitomi-tweak-help-overlay';
     const helpOverlayHiddenClassName = 'hitomi-tweak-help-overlay-hidden';
@@ -295,6 +297,15 @@
                     linear-gradient(
                         90deg,
                         rgba(59, 130, 246, 0.32) 0 100%,
+                        rgba(255, 255, 255, 0) 100%
+                    ) !important;
+            }
+
+            div.gallery-content > div.${bookDownloadCanceledClassName} {
+                background-image:
+                    linear-gradient(
+                        90deg,
+                        rgba(248, 113, 113, 0.24) 0 100%,
                         rgba(255, 255, 255, 0) 100%
                     ) !important;
             }
@@ -1034,7 +1045,7 @@
 
         label.className = bookDownloadProgressLabelClassName;
         book.querySelectorAll(`:scope > .${bookDownloadProgressLabelClassName}`).forEach(elem => elem.remove());
-        book.classList.remove(bookDownloadDoneClassName, bookDownloadErrorClassName);
+        book.classList.remove(bookDownloadDoneClassName, bookDownloadCanceledClassName, bookDownloadErrorClassName);
         book.classList.add(bookDownloadProgressClassName);
         book.style.setProperty('--hitomi-tweak-download-percent', '0%');
         book.appendChild(label);
@@ -1062,13 +1073,62 @@
         downloadProgress.book.classList.remove(
             bookDownloadProgressClassName,
             bookDownloadDoneClassName,
+            bookDownloadCanceledClassName,
             bookDownloadErrorClassName
         );
         downloadProgress.book.style.removeProperty('--hitomi-tweak-download-percent');
     }
 
-    function wait(ms) {
-        return new Promise(resolve => window.setTimeout(resolve, ms));
+    function createDownloadCanceledError() {
+        const error = new Error('Download canceled.');
+        error.name = downloadCanceledErrorName;
+        return error;
+    }
+
+    function throwIfDownloadCanceled(downloadState) {
+        if (downloadState?.canceled) {
+            throw createDownloadCanceledError();
+        }
+    }
+
+    function isDownloadCanceledError(error) {
+        return error?.name === downloadCanceledErrorName;
+    }
+
+    function wait(ms, downloadState) {
+        return new Promise((resolve, reject) => {
+            try {
+                throwIfDownloadCanceled(downloadState);
+            } catch (e) {
+                reject(e);
+                return;
+            }
+
+            const timeout = window.setTimeout(() => {
+                if (downloadState?.cancelWait === cancelWait) {
+                    downloadState.cancelWait = null;
+                }
+
+                try {
+                    throwIfDownloadCanceled(downloadState);
+                    resolve();
+                } catch (e) {
+                    reject(e);
+                }
+            }, ms);
+
+            function cancelWait() {
+                window.clearTimeout(timeout);
+                if (downloadState?.cancelWait === cancelWait) {
+                    downloadState.cancelWait = null;
+                }
+                reject(createDownloadCanceledError());
+            }
+
+            if (downloadState) {
+                downloadState.cancelWait = cancelWait;
+            }
+        });
     }
 
     async function waitForHitomiGg() {
@@ -1160,12 +1220,28 @@
         return fileName.replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, ' ').trim() || 'hitomi';
     }
 
-    function downloadBlob(url) {
+    function downloadBlob(url, downloadState) {
         return new Promise((resolve, reject) => {
+            try {
+                throwIfDownloadCanceled(downloadState);
+            } catch (e) {
+                reject(e);
+                return;
+            }
+
             const xhr = new XMLHttpRequest();
 
             xhr.onreadystatechange = function() {
                 if (this.readyState !== 4) return;
+
+                if (downloadState?.xhr === xhr) {
+                    downloadState.xhr = null;
+                }
+
+                if (downloadState?.canceled) {
+                    reject(createDownloadCanceledError());
+                    return;
+                }
 
                 if (this.status === 200) {
                     resolve(this.response);
@@ -1173,25 +1249,60 @@
                     reject(new Error(`downloadBlob(${url}) failed with ${this.status}.`));
                 }
             };
+            xhr.onabort = () => {
+                if (downloadState?.xhr === xhr) {
+                    downloadState.xhr = null;
+                }
+                reject(createDownloadCanceledError());
+            };
+            xhr.onerror = () => {
+                if (downloadState?.xhr === xhr) {
+                    downloadState.xhr = null;
+                }
+                reject(new Error(`downloadBlob(${url}) failed.`));
+            };
             xhr.open('GET', url);
             xhr.responseType = 'arraybuffer';
+            if (downloadState) {
+                downloadState.xhr = xhr;
+            }
             xhr.send();
         });
     }
 
-    async function retryDownloadBlob(url, retries = 3) {
+    async function retryDownloadBlob(url, downloadState, retries = 3) {
         let lastError = null;
 
         for (let i = 0; i < retries; i++) {
             try {
-                return await downloadBlob(url);
+                throwIfDownloadCanceled(downloadState);
+                return await downloadBlob(url, downloadState);
             } catch (e) {
+                if (isDownloadCanceledError(e)) throw e;
+
                 lastError = e;
-                await wait(500);
+                await wait(500, downloadState);
             }
         }
 
         throw lastError;
+    }
+
+    function createListDownloadState(downloadProgress) {
+        return {
+            canceled: false,
+            cancelWait: null,
+            progress: downloadProgress,
+            xhr: null
+        };
+    }
+
+    function cancelListDownload(downloadState) {
+        downloadState.canceled = true;
+        downloadState.cancelWait?.();
+        downloadState.xhr?.abort();
+        finishBookDownloadProgress(downloadState.progress, 'Canceled', bookDownloadCanceledClassName);
+        window.setTimeout(() => hideBookDownloadProgress(downloadState.progress), 1000);
     }
 
     async function downloadFocusedBookFromList() {
@@ -1202,7 +1313,7 @@
         if (!galleryId) return false;
 
         if (activeListDownloads.has(galleryId)) {
-            showListDownloadNotice('This book is already downloading.');
+            cancelListDownload(activeListDownloads.get(galleryId));
             return false;
         }
 
@@ -1212,7 +1323,8 @@
         }
 
         const downloadProgress = createBookDownloadProgress(book);
-        activeListDownloads.set(galleryId, downloadProgress);
+        const downloadState = createListDownloadState(downloadProgress);
+        activeListDownloads.set(galleryId, downloadState);
 
         try {
             updateBookDownloadProgress(downloadProgress, 'Loading...', 0);
@@ -1220,6 +1332,7 @@
                 waitForHitomiGg(),
                 loadGalleryInfo(galleryId)
             ]);
+            throwIfDownloadCanceled(downloadState);
 
             if (galleryInfo.type === 'anime') {
                 finishBookDownloadProgress(downloadProgress, 'Anime not supported', bookDownloadErrorClassName);
@@ -1236,17 +1349,25 @@
                 const imageName = image.name.replace(/[^.]*$/, 'webp');
 
                 updateBookDownloadProgress(downloadProgress, `${i + 1} / ${galleryInfo.files.length}`, i / galleryInfo.files.length * 100);
-                zip.file(imageName, await retryDownloadBlob(url), { binary: true });
-                await wait(1000);
+                zip.file(imageName, await retryDownloadBlob(url, downloadState), { binary: true });
+                await wait(1000, downloadState);
             }
 
+            throwIfDownloadCanceled(downloadState);
             updateBookDownloadProgress(downloadProgress, 'Zipping...', 100);
-            saveAs(await zip.generateAsync({ type: 'blob' }), `${title}.zip`);
+            const zipBlob = await zip.generateAsync({ type: 'blob' });
+            throwIfDownloadCanceled(downloadState);
+            saveAs(zipBlob, `${title}.zip`);
+            throwIfDownloadCanceled(downloadState);
             markListBookDownloaded(book, galleryInfo);
             finishBookDownloadProgress(downloadProgress, 'Downloaded', bookDownloadDoneClassName);
             window.setTimeout(() => hideBookDownloadProgress(downloadProgress), 1400);
             return true;
         } catch (e) {
+            if (isDownloadCanceledError(e)) {
+                return false;
+            }
+
             console.error(e);
             finishBookDownloadProgress(downloadProgress, 'Download failed', bookDownloadErrorClassName);
             return false;
