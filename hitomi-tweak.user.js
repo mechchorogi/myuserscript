@@ -88,7 +88,7 @@
     let galleryInfoLoadQueue = Promise.resolve();
     let listDownloadNotice = null;
     let listDownloadProgressStack = null;
-    let nameMap = { version: 1, group: {}, author: {} };
+    let nameMap = { version: 1, group: {}, author: {}, series: {} };
 
     function isReaderPage() {
         return location.pathname.startsWith('/reader/');
@@ -121,9 +121,12 @@
             throw new Error('Invalid name map format');
         }
 
-        const normalized = { version: 1, group: {}, author: {} };
-        for (const kind of ['group', 'author']) {
-            for (const [key, value] of Object.entries(input[kind])) {
+        const normalized = { version: 1, group: {}, author: {}, series: {} };
+        for (const kind of ['group', 'author', 'series']) {
+            // `series` was added after the initial schema, so older complete-map
+            // exports are accepted and treated as an empty series namespace.
+            const source = isPlainObject(input[kind]) ? input[kind] : {};
+            for (const [key, value] of Object.entries(source)) {
                 const normalizedKey = normalizeNameMapKey(key);
                 if (normalizedKey && typeof value === 'string') {
                     normalized[kind][normalizedKey] = value.trim();
@@ -137,7 +140,7 @@
         try {
             return normalizeNameMap(JSON.parse(localStorage.getItem(nameMapKey) || 'null'));
         } catch (e) {
-            return { version: 1, group: {}, author: {} };
+            return { version: 1, group: {}, author: {}, series: {} };
         }
     }
 
@@ -168,11 +171,11 @@
 
     function resolveJapaneseName(name, kind) {
         const normalized = normalizeNameMapKey(name);
-        return (kind === 'group' || kind === 'author') && normalized ? nameMap[kind]?.[normalized] || name : name;
+        return (kind === 'group' || kind === 'author' || kind === 'series') && normalized ? nameMap[kind]?.[normalized] || name : name;
     }
 
     function getNameMapEntries(map = nameMap) {
-        return ['group', 'author']
+        return ['group', 'author', 'series']
             .flatMap(kind => Object.entries(map[kind] || {}).map(([romaji, japanese]) => ({ kind, romaji, japanese })))
             .sort((a, b) => a.romaji.localeCompare(b.romaji, undefined, { numeric: true, sensitivity: 'base' }) || a.kind.localeCompare(b.kind));
     }
@@ -1268,7 +1271,7 @@
         japaneseInput.placeholder = 'Japanese name';
         addBtn.type = 'submit';
         addBtn.textContent = 'Add';
-        for (const kind of ['group', 'author']) {
+        for (const kind of ['group', 'author', 'series']) {
             const option = document.createElement('option');
             option.value = kind;
             option.textContent = kind;
@@ -1413,7 +1416,7 @@
             const romaji = normalizeNameMapKey(romajiInput.value);
             const japanese = japaneseInput.value.trim();
             const kind = kindSelect.value;
-            if (!romaji || !japanese || !['group', 'author'].includes(kind)) {
+            if (!romaji || !japanese || !['group', 'author', 'series'].includes(kind)) {
                 setStatus('Romaji, Japanese name, and kind are required.');
                 return;
             }
@@ -1576,7 +1579,7 @@
     }
 
     function getBookPageTitle(root, galleryInfo, galleryId) {
-        // Book pages hydrate title/author/group from galleryinfo after the initial HTML loads.
+        // Book pages hydrate title/author/group/series from galleryinfo after the initial HTML loads.
         // Keep DOM reads first for live book pages, but fall back to galleryinfo so list-page downloads
         // can use the same naming path without fetching and executing the book page.
         return normalizeMetadataText(root.querySelector('h1#gallery-brand > a')?.textContent)
@@ -1620,10 +1623,34 @@
         return [...new Set(names)];
     }
 
-    function formatDownloadFileNameFromMetadata({ group, authors, title }) {
+    function getBookPageSeries(root, galleryInfo) {
+        const tableRows = Array.from(root.querySelectorAll('table tr'));
+        for (const row of tableRows) {
+            const cells = Array.from(row.children);
+            if (normalizeMetadataText(cells[0]?.textContent).toLowerCase() === 'series') {
+                const series = normalizeMetadataText(cells[1]?.textContent);
+                if (!isMissingMetadataValue(series)) return resolveJapaneseName(series, 'series');
+            }
+        }
+
+        const labels = Array.from(root.querySelectorAll('dt, th, td, h2, h3, strong, b'));
+        const seriesLabel = labels.find(label => normalizeMetadataText(label.textContent).toLowerCase() === 'series');
+        if (seriesLabel) {
+            const series = normalizeMetadataText(seriesLabel.nextElementSibling?.textContent);
+            if (!isMissingMetadataValue(series)) return resolveJapaneseName(series, 'series');
+        }
+
+        return getGalleryInfoNames(galleryInfo?.parodys, 'parody')
+            .map(series => resolveJapaneseName(series, 'series'))
+            .join(', ');
+    }
+
+    function formatDownloadFileNameFromMetadata({ group, authors, title, series }) {
         const hasGroup = !isMissingMetadataValue(group);
         const normalizedGroup = normalizeMetadataText(group);
         const normalizedAuthors = authors.map(author => normalizeMetadataText(author)).filter(Boolean);
+        const normalizedSeries = normalizeMetadataText(series);
+        const seriesPart = isMissingMetadataValue(normalizedSeries) ? '' : ` (${normalizedSeries})`;
         let authorPart = '';
 
         // Preserve one or two credited authors in the filename. Collapse three or more
@@ -1645,7 +1672,7 @@
             bracket = authorPart;
         }
 
-        return sanitizeFileName(`[${bracket}] ${title}`);
+        return sanitizeFileName(`[${bracket}] ${title}${seriesPart}`);
     }
 
     function getDownloadFileNameFromBookPageDocument(root, galleryInfo, galleryId) {
@@ -1654,6 +1681,7 @@
         return formatDownloadFileNameFromMetadata({
             group: getBookPageGroup(root, galleryInfo),
             authors: getBookPageAuthors(root, galleryInfo),
+            series: getBookPageSeries(root, galleryInfo),
             title: getBookPageTitle(root, galleryInfo, galleryId)
         });
     }
