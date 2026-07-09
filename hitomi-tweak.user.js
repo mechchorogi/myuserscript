@@ -57,6 +57,7 @@
     const bookDownloadCanceledClassName = 'hitomi-tweak-book-download-canceled';
     const bookDownloadErrorClassName = 'hitomi-tweak-book-download-error';
     const bookDownloadProgressLabelClassName = 'hitomi-tweak-book-download-progress-label';
+    const bookPageProgressLabelClassName = 'hitomi-tweak-book-page-progress-label';
     const downloadedBookHeadingClassName = 'hitomi-tweak-downloaded-book-heading';
     const downloadCanceledErrorName = 'HitomiTweakDownloadCanceled';
     const focusedBookClassName = 'hitomi-tweak-focused-book';
@@ -476,6 +477,63 @@
                 text-overflow: ellipsis;
                 white-space: nowrap;
                 pointer-events: none;
+            }
+
+            #progressbar {
+                position: relative;
+                box-sizing: border-box !important;
+                height: 21px;
+                padding: 3px !important;
+                border: none !important;
+                border-radius: 10.5px;
+                background: #0f172a !important;
+                overflow: hidden;
+            }
+
+            #progressbar .ui-progressbar-value {
+                height: 100%;
+                margin: 0;
+                border: none !important;
+                border-radius: 7.5px;
+                background:
+                    repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.25) 0 6px, transparent 6px 12px),
+                    #38bdf8 !important;
+                animation: hitomi-tweak-progress-stripes 0.9s linear infinite;
+                transition: width 0.25s ease;
+            }
+
+            #progressbar > .${bookPageProgressLabelClassName} {
+                position: absolute;
+                top: 0;
+                right: 9px;
+                z-index: 2;
+                height: 21px;
+                display: flex;
+                align-items: center;
+                background: transparent !important;
+                border: none !important;
+                color: #e2e8f0;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+                font-size: 11px;
+                font-weight: 600;
+                line-height: 1;
+                font-variant-numeric: tabular-nums;
+                text-shadow: 0 0 2px rgba(2, 6, 23, 0.6);
+                white-space: nowrap;
+                pointer-events: none;
+            }
+
+            #progressbar > .${bookPageProgressLabelClassName}:empty {
+                display: none;
+            }
+
+            #progressbar .ui-progressbar-overlay {
+                display: none;
+            }
+
+            @keyframes hitomi-tweak-progress-stripes {
+                from { background-position: 0 0; }
+                to { background-position: 16.97px 0; }
             }
 
             h1.lillie.${downloadedBookHeadingClassName}::before {
@@ -1512,10 +1570,31 @@
         return unsafeWindow.jQuery || unsafeWindow.$;
     }
 
+    function getBookPageDownloadProgressLabel(progressbar) {
+        if (!progressbar) return null;
+
+        let label = progressbar.querySelector(`:scope > .${bookPageProgressLabelClassName}`);
+        if (!label) {
+            label = document.createElement('div');
+            label.className = bookPageProgressLabelClassName;
+            progressbar.appendChild(label);
+        }
+
+        return label;
+    }
+
     function showBookPageDownloadProgress() {
         const $ = getPageJQuery();
         const progressbar = document.querySelector('#progressbar');
         const dlButton = getDLButton();
+
+        if (progressbar) {
+            // The page's progressbar is owned by Hitomi/jQuery UI, so establish our
+            // own positioning context before overlaying a lightweight text label.
+            progressbar.style.position = 'relative';
+            const label = getBookPageDownloadProgressLabel(progressbar);
+            if (label) label.textContent = '';
+        }
 
         if ($ && progressbar && typeof $(progressbar).progressbar === 'function') {
             $(dlButton).hide();
@@ -1528,9 +1607,12 @@
         if (progressbar) progressbar.style.display = '';
     }
 
-    function updateBookPageDownloadProgress(percent) {
+    function updateBookPageDownloadProgress(percent, text) {
         const $ = getPageJQuery();
         const progressbar = document.querySelector('#progressbar');
+        const label = getBookPageDownloadProgressLabel(progressbar);
+
+        if (label) label.textContent = text || '';
 
         if ($ && progressbar && typeof $(progressbar).progressbar === 'function') {
             $(progressbar).progressbar('value', Math.max(0, Math.min(100, percent)));
@@ -1541,6 +1623,8 @@
         const $ = getPageJQuery();
         const progressbar = document.querySelector('#progressbar');
         const dlButton = getDLButton();
+
+        progressbar?.querySelector(`:scope > .${bookPageProgressLabelClassName}`)?.remove();
 
         if ($) {
             if (progressbar) $(progressbar).hide();
@@ -1858,7 +1942,7 @@
                 const imageName = image.name.replace(/[^.]*$/, 'webp');
 
                 zip.file(imageName, await retryDownloadBlob(url, downloadState), { binary: true });
-                updateBookPageDownloadProgress((i + 1) / galleryInfo.files.length * 100);
+                updateBookPageDownloadProgress((i + 1) / galleryInfo.files.length * 100, `${i + 1} / ${galleryInfo.files.length}`);
                 await wait(1000, downloadState);
             }
 
