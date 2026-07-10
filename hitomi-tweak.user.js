@@ -69,6 +69,7 @@
     // displayed shortcuts do not drift from the actual behavior.
     const keyboardShortcuts = [
         ['/', 'Toggle this help'],
+        ['a', 'Open author link'],
         ['b', 'Toggle blocklist mode'],
         ['d', 'Download current book (up to 4 on list pages)'],
         ['j', 'Focus next book'],
@@ -2480,6 +2481,17 @@
         }
     }
 
+    function openAuthorLinks() {
+        const links = focusedBook
+            ? focusedBook.querySelectorAll(':scope > div.artist-list > ul > li > a[href]')
+            : document.querySelectorAll('h2#artists > ul > li > a[href]');
+        const urls = [...new Set(Array.from(links, link => new URL(link.getAttribute('href'), location.href).href))];
+        if (urls.length === 0) return false;
+
+        urls.forEach(openUrlInNewTab);
+        return true;
+    }
+
     function openFocusedBookReader() {
         if (!focusedBook) return false;
 
@@ -2597,7 +2609,7 @@
     function handleGlobalKeydown(e) {
         // Global shortcuts are plain-key only so browser/system shortcuts and text
         // entry fields keep their native behavior.
-        if (!['/', 'b', 'c', 'd', 'j', 'k', 'r', 't', 'v'].includes(e.key) || !hasPlainModifierState(e)) return;
+        if (!['/', 'a', 'b', 'c', 'd', 'j', 'k', 'r', 't', 'v'].includes(e.key) || !hasPlainModifierState(e)) return;
         if (isEditableTarget(e.target)) return;
 
         if (e.key === '/') {
@@ -2612,6 +2624,14 @@
             if (!filterMarkModeButton || isReaderPage()) return;
             e.preventDefault();
             filterMarkModeButton.click();
+            return;
+        }
+
+        if (e.key === 'a') {
+            if (isReaderPage()) return;
+            if (openAuthorLinks()) {
+                e.preventDefault();
+            }
             return;
         }
 
