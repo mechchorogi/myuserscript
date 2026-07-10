@@ -2425,10 +2425,22 @@
         return Array.from(document.querySelectorAll('div.gallery-content > div'));
     }
 
+    function getListNavigationScrollPadding() {
+        // Keep a viewport-relative buffer around focused books. This avoids depending
+        // on Hitomi's pagination class names, which have changed across list pages.
+        const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+        const viewportPadding = Math.min(180, Math.max(96, viewportHeight * 0.16));
+        const paginationHeight = Math.max(
+            0,
+            ...Array.from(document.querySelectorAll('.pagination'), elem => elem.getBoundingClientRect().height)
+        );
+        return Math.max(viewportPadding, paginationHeight + 12);
+    }
+
     function scrollBookIntoViewIfNeeded(book) {
         const rect = book.getBoundingClientRect();
         const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
-        const padding = 12;
+        const padding = getListNavigationScrollPadding();
 
         if (rect.top < padding) {
             window.scrollBy({
