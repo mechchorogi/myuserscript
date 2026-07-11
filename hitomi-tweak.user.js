@@ -2514,8 +2514,12 @@
         scrollBookIntoViewIfNeeded(focusedBook);
     }
 
+    function getFocusedBook() {
+        return focusedBook?.isConnected ? focusedBook : null;
+    }
+
     function openFocusedBookInBackgroundTab() {
-        const link = focusedBook?.querySelector(':scope > h1 > a');
+        const link = getFocusedBook()?.querySelector(':scope > h1 > a');
         if (!link?.href) return false;
 
         if (typeof GM !== 'undefined' && typeof GM.openInTab === 'function') {
@@ -2546,8 +2550,9 @@
     }
 
     function openAuthorLinks() {
-        const links = focusedBook
-            ? focusedBook.querySelectorAll(':scope > div.artist-list > ul > li > a[href]')
+        const book = getFocusedBook();
+        const links = book
+            ? book.querySelectorAll(':scope div.artist-list li a[href]')
             : document.querySelectorAll('h2#artists > ul > li > a[href]');
         const urls = [...new Set(Array.from(links, link => new URL(link.getAttribute('href'), location.href).href))];
         if (urls.length === 0) return false;
@@ -2557,11 +2562,12 @@
     }
 
     function openFocusedBookReader() {
-        if (!focusedBook) return false;
+        const book = getFocusedBook();
+        if (!book) return false;
 
         // List cards do not include a reader link, but Hitomi reader URLs are derived
         // directly from the gallery id used in the book URL.
-        const bookId = getBookIdFromElement(focusedBook);
+        const bookId = getBookIdFromElement(book);
         if (!bookId) return false;
 
         openUrlInNewTab(new URL(`/reader/${bookId}.html`, location.href).href);
@@ -2701,13 +2707,16 @@
 
         if (e.key === 'd') {
             if (isReaderPage()) return;
-            const dlButton = getDLButton();
 
             e.preventDefault();
+            if (getFocusedBook()) {
+                downloadFocusedBookFromList();
+                return;
+            }
+
+            const dlButton = getDLButton();
             if (dlButton) {
                 downloadBook(dlButton);
-            } else {
-                downloadFocusedBookFromList();
             }
             return;
         }
@@ -2720,7 +2729,7 @@
 
         if (e.key === 'r') {
             if (isReaderPage()) return;
-            if (clickReadOnlineButton() || openFocusedBookReader()) {
+            if (openFocusedBookReader() || clickReadOnlineButton()) {
                 e.preventDefault();
             }
             return;
