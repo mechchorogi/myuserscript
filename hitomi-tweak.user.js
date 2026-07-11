@@ -41,6 +41,7 @@
     const nameMapKey = 'hitomi-tweak-name-map';
     const nameMapPagePath = '/hitomi-tweak-name-map.html';
     const preferredLanguageKey = 'hitomi-tweak-preferred-language';
+    const closeBookPageAfterDownloadKey = 'hitomi-tweak-close-book-page-after-download';
     const preferredLanguageOptions = [
         ['off', 'Off'],
         ['japanese', 'Japanese'],
@@ -192,6 +193,10 @@
 
     async function loadPreferredLanguage() {
         return normalizePreferredLanguage(await GM.getValue(preferredLanguageKey, 'off'));
+    }
+
+    async function loadCloseBookPageAfterDownload() {
+        return Boolean(await GM.getValue(closeBookPageAfterDownloadKey, false));
     }
 
     function getPreferredLanguageRedirectPath(pathname, language) {
@@ -859,6 +864,7 @@
             boxShadow: '0 4px 20px rgba(0, 0, 0, 0.1)',
             fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif',
             fontSize: '14px',
+            zoom: '0.95',
             zIndex: 9999
         });
 
@@ -978,6 +984,34 @@
 
         const nameMapImportBtn = document.createElement('button');
         nameMapImportBtn.textContent = 'Import';
+
+        const closeAfterDownloadSection = document.createElement('div');
+        const closeAfterDownloadLabel = document.createElement('label');
+        const closeAfterDownloadCheckbox = document.createElement('input');
+        const closeAfterDownloadSwitch = document.createElement('label');
+        const closeAfterDownloadSlider = document.createElement('span');
+
+        closeAfterDownloadLabel.textContent = 'Close tab after download';
+        closeAfterDownloadLabel.htmlFor = 'hitomi-tweak-close-after-download-toggle';
+        Object.assign(closeAfterDownloadLabel.style, {
+            cursor: 'pointer',
+            userSelect: 'none'
+        });
+
+        closeAfterDownloadCheckbox.id = closeAfterDownloadLabel.htmlFor;
+        closeAfterDownloadCheckbox.className = 'hitomi-switch-input';
+        closeAfterDownloadCheckbox.type = 'checkbox';
+        closeAfterDownloadCheckbox.checked = await loadCloseBookPageAfterDownload();
+        closeAfterDownloadCheckbox.setAttribute('aria-label', 'Close tab after book page download');
+        closeAfterDownloadCheckbox.addEventListener('change', () => {
+            GM.setValue(closeBookPageAfterDownloadKey, closeAfterDownloadCheckbox.checked).catch(() => {});
+        });
+
+        closeAfterDownloadSwitch.className = 'hitomi-switch';
+        closeAfterDownloadSwitch.htmlFor = closeAfterDownloadCheckbox.id;
+
+        closeAfterDownloadSlider.className = 'hitomi-switch-slider';
+        closeAfterDownloadSwitch.append(closeAfterDownloadCheckbox, closeAfterDownloadSlider);
 
         exportBtn.addEventListener('click', async () => {
             const data = {};
@@ -1105,7 +1139,19 @@
         });
         nameMapBackupRow.append(nameMapExportBtn, nameMapImportBtn);
 
-        buttonRow.append(markModeRow, backupRow, nameMapHeading, nameMapBackupRow);
+        Object.assign(closeAfterDownloadSection.style, {
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '10px',
+            fontWeight: 'bold',
+            marginTop: '2px',
+            paddingTop: '12px',
+            borderTop: '1px solid rgba(0, 0, 0, 0.3)'
+        });
+        closeAfterDownloadSection.append(closeAfterDownloadLabel, closeAfterDownloadSwitch);
+
+        buttonRow.append(markModeRow, backupRow, nameMapHeading, nameMapBackupRow, closeAfterDownloadSection);
         panel.appendChild(buttonRow);
 
         for (const key of blacklistKeys) {
@@ -1954,6 +2000,9 @@
             throwIfDownloadCanceled(downloadState);
             hideBookPageDownloadProgress();
             markCurrentBookDownloaded(galleryInfo, galleryId);
+            if (await loadCloseBookPageAfterDownload()) {
+                closeCurrentTab();
+            }
             return true;
         } catch (e) {
             if (isDownloadCanceledError(e)) {
