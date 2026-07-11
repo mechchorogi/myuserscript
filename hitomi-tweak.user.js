@@ -76,7 +76,7 @@
         ['j', 'Focus next book'],
         ['k', 'Focus previous book'],
         ['t', 'Fold focused book'],
-        ['v', 'Open focused book in background tab'],
+        ['v', 'Open focused book in background tab and focus next book'],
         ['r', 'Open read online link'],
         ['c', 'Close current tab']
     ];
@@ -2739,6 +2739,7 @@
             if (isReaderPage()) return;
             if (openFocusedBookInBackgroundTab()) {
                 e.preventDefault();
+                handleFocusNextBook();
             }
             return;
         }
