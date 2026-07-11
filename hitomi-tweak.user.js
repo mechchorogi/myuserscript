@@ -883,6 +883,9 @@
 
         preferredLanguageLabel.textContent = 'Preferred Language:';
         preferredLanguageLabel.htmlFor = 'hitomi-tweak-preferred-language-select';
+        Object.assign(preferredLanguageLabel.style, {
+            fontWeight: 'bold'
+        });
 
         preferredLanguageSelect.id = preferredLanguageLabel.htmlFor;
         preferredLanguageSelect.style.width = '100%';
@@ -991,7 +994,7 @@
         const closeAfterDownloadSwitch = document.createElement('label');
         const closeAfterDownloadSlider = document.createElement('span');
 
-        closeAfterDownloadLabel.textContent = 'Close tab after download';
+        closeAfterDownloadLabel.textContent = 'Auto tab close';
         closeAfterDownloadLabel.htmlFor = 'hitomi-tweak-close-after-download-toggle';
         Object.assign(closeAfterDownloadLabel.style, {
             cursor: 'pointer',
