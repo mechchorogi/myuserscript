@@ -92,6 +92,7 @@
     let listDownloadNotice = null;
     let listDownloadProgressStack = null;
     let nameMap = { version: 1, group: {}, author: {}, series: {} };
+    let titleBeforeListDownloads = null;
 
     function isReaderPage() {
         return location.pathname.startsWith('/reader/');
@@ -2343,6 +2344,21 @@
         };
     }
 
+    function updateListDownloadTitle() {
+        const count = activeListDownloads.size;
+
+        if (count > 0) {
+            titleBeforeListDownloads ||= document.title.replace(/^\(\d+\)\s*/, '');
+            document.title = `(${count}) ${titleBeforeListDownloads}`;
+            return;
+        }
+
+        if (titleBeforeListDownloads !== null) {
+            document.title = titleBeforeListDownloads;
+            titleBeforeListDownloads = null;
+        }
+    }
+
     function cancelListDownload(downloadState) {
         downloadState.canceled = true;
         downloadState.cancelWait?.();
@@ -2371,6 +2387,7 @@
         const downloadProgress = createBookDownloadProgress(book);
         const downloadState = createListDownloadState(downloadProgress);
         activeListDownloads.set(galleryId, downloadState);
+        updateListDownloadTitle();
 
         try {
             // The list page only has a gallery id. galleryinfo provides files and metadata
@@ -2421,6 +2438,7 @@
             return false;
         } finally {
             activeListDownloads.delete(galleryId);
+            updateListDownloadTitle();
         }
     }
 
