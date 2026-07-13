@@ -37,6 +37,8 @@
 
     const blacklistKeys = ['author', 'language', 'series', 'tag', 'title', 'type'];
     const downloadHistoryKey = 'hitomi-tweak-download-history';
+    const downloadQueueKey = 'hitomi-tweak-download-queue';
+    const downloadQueueLockName = 'hitomi-tweak-download-queue-lock';
     const foldedBookIdsKey = 'hitomi-tweak-folded-book-ids';
     const nameMapKey = 'hitomi-tweak-name-map';
     const nameMapPagePath = '/hitomi-tweak-name-map.html';
@@ -50,7 +52,11 @@
         ['korean', 'Korean'],
         ['all', 'All']
     ];
-    const maxListDownloadCount = 4;
+    const maxGlobalDownloadCount = 4;
+    const downloadQueueWorkerInterval = 2500;
+    const downloadQueueHeartbeatInterval = 5000;
+    const downloadQueueStaleRunningMs = 180000;
+    const downloadQueueTerminalTtlMs = 60000;
     const downloadProgressStackClassName = 'hitomi-tweak-download-progress-stack';
     const downloadProgressClassName = 'hitomi-tweak-download-progress';
     const bookDownloadProgressClassName = 'hitomi-tweak-book-download-progress';
@@ -61,6 +67,7 @@
     const bookPageProgressLabelClassName = 'hitomi-tweak-book-page-progress-label';
     const downloadedBookHeadingClassName = 'hitomi-tweak-downloaded-book-heading';
     const downloadCanceledErrorName = 'HitomiTweakDownloadCanceled';
+    const downloadAnimeNotSupportedErrorName = 'HitomiTweakDownloadAnimeNotSupported';
     const focusedBookClassName = 'hitomi-tweak-focused-book';
     const helpOverlayClassName = 'hitomi-tweak-help-overlay';
     const helpOverlayHiddenClassName = 'hitomi-tweak-help-overlay-hidden';
@@ -72,7 +79,7 @@
         ['/', 'Toggle this help'],
         ['a', 'Open author link'],
         ['b', 'Toggle blocklist mode'],
-        ['d', 'Download current book (up to 4 on list pages)'],
+        ['d', 'Queue, remove, or cancel current book download'],
         ['j', 'Focus next book'],
         ['k', 'Focus previous book'],
         ['t', 'Fold focused book'],
@@ -88,11 +95,17 @@
     let helpOverlay = null;
     let activeBookPageDownload = null;
     let activeListDownloads = new Map();
+    let activeQueuedDownloads = new Map();
     let galleryInfoLoadQueue = Promise.resolve();
     let listDownloadNotice = null;
     let listDownloadProgressStack = null;
     let nameMap = { version: 1, group: {}, author: {}, series: {} };
+    let queuedBookProgress = new Map();
     let titleBeforeListDownloads = null;
+    let downloadQueueWriteQueue = Promise.resolve();
+    let downloadQueueWorkerTimer = null;
+    let downloadQueueWorkerRunning = false;
+    const downloadQueueWorkerId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
     function isReaderPage() {
         return location.pathname.startsWith('/reader/');
@@ -1597,6 +1610,177 @@
         await GM.setValue(downloadHistoryKey, history);
     }
 
+    function normalizeDownloadQueue(input) {
+        if (!input || typeof input !== 'object' || input.version !== 1 || !Array.isArray(input.items)) {
+            return { version: 1, items: [] };
+        }
+
+        return {
+            version: 1,
+            items: input.items
+                .filter(item => item && typeof item === 'object' && item.galleryId)
+                .map(item => ({
+                    id: String(item.id || `gallery-${item.galleryId}-${Date.now().toString(36)}`),
+                    galleryId: String(item.galleryId),
+                    url: String(item.url || ''),
+                    title: String(item.title || ''),
+                    source: item.source === 'list' ? 'list' : 'book',
+                    status: ['pending', 'running', 'done', 'error', 'canceled'].includes(item.status) ? item.status : 'pending',
+                    createdAt: String(item.createdAt || new Date().toISOString()),
+                    updatedAt: String(item.updatedAt || item.createdAt || new Date().toISOString()),
+                    startedAt: item.startedAt || null,
+                    finishedAt: item.finishedAt || null,
+                    heartbeatAt: item.heartbeatAt || null,
+                    workerId: item.workerId || null,
+                    error: String(item.error || '')
+                }))
+        };
+    }
+
+    async function loadDownloadQueue() {
+        return normalizeDownloadQueue(await GM.getValue(downloadQueueKey, { version: 1, items: [] }));
+    }
+
+    async function saveDownloadQueue(queue) {
+        await GM.setValue(downloadQueueKey, normalizeDownloadQueue(queue));
+    }
+
+    function isTerminalDownloadQueueStatus(status) {
+        return ['done', 'error', 'canceled'].includes(status);
+    }
+
+    function prepareDownloadQueueForWrite(queue) {
+        const now = Date.now();
+        const nowIso = new Date(now).toISOString();
+
+        queue.items = queue.items
+            .map(item => {
+                if (
+                    item.status === 'running'
+                    && item.workerId !== downloadQueueWorkerId
+                    && (!item.heartbeatAt || now - Date.parse(item.heartbeatAt) > downloadQueueStaleRunningMs)
+                ) {
+                    return {
+                        ...item,
+                        status: 'pending',
+                        updatedAt: nowIso,
+                        startedAt: null,
+                        heartbeatAt: null,
+                        workerId: null,
+                        error: ''
+                    };
+                }
+                return item;
+            })
+            .filter(item => !isTerminalDownloadQueueStatus(item.status) || !item.finishedAt || now - Date.parse(item.finishedAt) <= downloadQueueTerminalTtlMs);
+
+        return queue;
+    }
+
+    async function withDownloadQueueLock(task) {
+        if (navigator.locks?.request) {
+            return navigator.locks.request(downloadQueueLockName, async () => task());
+        }
+
+        // Web Locks provide cross-tab serialization. This fallback keeps writes in
+        // this tab ordered when the API is unavailable.
+        const next = downloadQueueWriteQueue.then(task, task);
+        downloadQueueWriteQueue = next.catch(() => {});
+        return next;
+    }
+
+    async function updateDownloadQueue(mutator) {
+        return withDownloadQueueLock(async () => {
+            const queue = await loadDownloadQueue();
+            const before = JSON.stringify(queue);
+
+            prepareDownloadQueueForWrite(queue);
+            const result = await mutator(queue);
+
+            if (JSON.stringify(queue) !== before) {
+                await saveDownloadQueue(queue);
+            }
+            return result;
+        });
+    }
+
+    async function markQueuedDownload(queueItemId, changes) {
+        return updateDownloadQueue(queue => {
+            const item = queue.items.find(candidate => candidate.id === queueItemId);
+            if (!item) return null;
+
+            const nextChanges = typeof changes === 'function' ? changes(item) : changes;
+            if (!nextChanges) return item;
+
+            Object.assign(item, nextChanges, { updatedAt: new Date().toISOString() });
+            return item;
+        });
+    }
+
+    function getBookQueueTarget(book) {
+        const link = getBookLinkFromElement(book);
+        const galleryId = getBookIdFromElement(book);
+        if (!link || !galleryId) return null;
+
+        return {
+            galleryId,
+            url: new URL(link.getAttribute('href'), location.href).href,
+            title: book.querySelector('h1.lillie')?.textContent.trim() || '',
+            source: 'list'
+        };
+    }
+
+    function getCurrentBookQueueTarget() {
+        const galleryId = getCurrentGalleryId();
+        if (!galleryId) return null;
+
+        return {
+            galleryId,
+            url: location.href,
+            title: getBookTitle(),
+            source: 'book'
+        };
+    }
+
+    function createDownloadQueueItem(target) {
+        const now = new Date().toISOString();
+
+        return {
+            id: `gallery-${target.galleryId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+            galleryId: String(target.galleryId),
+            url: target.url,
+            title: target.title || '',
+            source: target.source,
+            status: 'pending',
+            createdAt: now,
+            updatedAt: now,
+            startedAt: null,
+            finishedAt: null,
+            heartbeatAt: null,
+            workerId: null,
+            error: ''
+        };
+    }
+
+    async function enqueueDownload(target) {
+        return updateDownloadQueue(queue => {
+            const existing = queue.items.find(item => item.galleryId === String(target.galleryId) && item.status === 'pending');
+            if (existing) {
+                queue.items = queue.items.filter(item => item !== existing);
+                return { action: 'removed', item: existing };
+            }
+
+            const running = queue.items.find(item => item.galleryId === String(target.galleryId) && item.status === 'running');
+            if (running) {
+                return { action: 'already-running', item: running };
+            }
+
+            const item = createDownloadQueueItem(target);
+            queue.items.push(item);
+            return { action: 'queued', item };
+        });
+    }
+
     function markDLButtonDownloaded() {
         const heading = document.querySelector('a#dl-button > h1');
         if (!heading) return false;
@@ -1926,13 +2110,15 @@
         }
     }
 
-    function createBookPageDownloadState() {
+    function createBookPageDownloadState(previousText = getDLButtonText()) {
         // Book-page downloads use Hitomi's original progressbar UI, but the transfer
         // itself is ours so pressing d again can cancel XHR/throttle waits safely.
         return {
             canceled: false,
             cancelWait: null,
-            previousText: getDLButtonText(),
+            heartbeatTimer: null,
+            queueItemId: null,
+            previousText,
             xhr: null
         };
     }
@@ -1949,80 +2135,330 @@
         downloadState.canceled = true;
         downloadState.cancelWait?.();
         downloadState.xhr?.abort();
+        if (downloadState.heartbeatTimer) {
+            window.clearInterval(downloadState.heartbeatTimer);
+        }
         hideBookPageDownloadProgress();
         setDLButtonText('CANCELED');
         restoreDLButtonTextWhenIdle(downloadState, 1000);
     }
 
-    async function downloadBook(dlButton) {
-        if (!dlButton) return false;
+    function getVisibleBookForGalleryId(galleryId) {
+        return getBooks().find(book => getBookIdFromElement(book) === String(galleryId)) || null;
+    }
 
-        if (activeBookPageDownload) {
-            // On book pages, pressing d while the same page download is active means
-            // cancel instead of starting a second archive build.
-            cancelBookPageDownload(activeBookPageDownload);
-            return false;
+    function getDownloadHistoryKeyFromUrl(url, galleryId) {
+        try {
+            return new URL(url, location.href).pathname.replace(/\/$/, '');
+        } catch (e) {
+            return String(galleryId);
+        }
+    }
+
+    function markQueuedDownloadCompleted(queueItem, galleryInfo, visibleBook) {
+        if (visibleBook) {
+            markListBookDownloaded(visibleBook, galleryInfo);
+            return;
         }
 
-        const galleryId = getCurrentGalleryId();
-        if (!galleryId) return false;
+        if (String(getCurrentGalleryId()) === String(queueItem.galleryId)) {
+            markCurrentBookDownloaded(galleryInfo, queueItem.galleryId);
+            return;
+        }
 
-        const downloadState = createBookPageDownloadState();
-        activeBookPageDownload = downloadState;
-        try {
+        const metadataRoot = String(getCurrentGalleryId()) === String(queueItem.galleryId) ? document : document.createElement('div');
+        const key = getDownloadHistoryKeyFromUrl(queueItem.url, queueItem.galleryId);
+        const metadata = getDownloadHistoryMetadata(metadataRoot, galleryInfo, queueItem.galleryId, queueItem.title || document.title);
+        const entry = {
+            ...metadata,
+            url: queueItem.url || location.href,
+            downloadedAt: new Date().toISOString()
+        };
+        const localHistory = loadLocalDownloadHistory();
+
+        localHistory[key] = entry;
+        saveLocalDownloadHistory(localHistory);
+        syncDownloadHistoryEntry(key, entry);
+        refreshDownloadIndicators().catch(() => {});
+    }
+
+    function startDownloadQueueHeartbeat(downloadState) {
+        if (!downloadState.queueItemId) return;
+
+        downloadState.heartbeatTimer = window.setInterval(() => {
+            markQueuedDownload(downloadState.queueItemId, {
+                heartbeatAt: new Date().toISOString(),
+                workerId: downloadQueueWorkerId
+            }).catch(() => {});
+        }, downloadQueueHeartbeatInterval);
+    }
+
+    function stopDownloadQueueHeartbeat(downloadState) {
+        if (!downloadState.heartbeatTimer) return;
+
+        window.clearInterval(downloadState.heartbeatTimer);
+        downloadState.heartbeatTimer = null;
+    }
+
+    async function buildAndSaveGalleryArchive(queueItem, downloadState, onProgress) {
+        const galleryId = String(queueItem.galleryId);
+        const [gg, galleryInfo] = await Promise.all([
+            waitForHitomiGg(),
+            String(getCurrentGalleryId()) === galleryId
+                ? loadCurrentBookPageGalleryInfo(galleryId, downloadState)
+                : loadGalleryInfo(galleryId)
+        ]);
+        throwIfDownloadCanceled(downloadState);
+
+        if (galleryInfo.type === 'anime') {
+            throw createAnimeNotSupportedError();
+        }
+
+        const zip = new JSZip();
+        const metadataRoot = String(getCurrentGalleryId()) === galleryId ? document : document.createElement('div');
+        const title = getDownloadFileNameFromBookPageDocument(metadataRoot, galleryInfo, galleryId);
+
+        for (let i = 0; i < galleryInfo.files.length; i++) {
+            const image = galleryInfo.files[i];
+            const url = urlFromUrlFromHash(image, 'webp', 'webp', undefined, gg);
+            const imageName = image.name.replace(/[^.]*$/, 'webp');
+
+            zip.file(imageName, await retryDownloadBlob(url, downloadState), { binary: true });
+            onProgress(`${i + 1} / ${galleryInfo.files.length}`, (i + 1) / galleryInfo.files.length * 100);
+            await markQueuedDownload(queueItem.id, {
+                heartbeatAt: new Date().toISOString(),
+                workerId: downloadQueueWorkerId
+            });
+            await wait(1000, downloadState);
+        }
+
+        throwIfDownloadCanceled(downloadState);
+        onProgress('Zipping...', 100);
+        const zipBlob = await zip.generateAsync({ type: 'blob' });
+        throwIfDownloadCanceled(downloadState);
+        saveAs(zipBlob, `${title}.zip`);
+        throwIfDownloadCanceled(downloadState);
+
+        return galleryInfo;
+    }
+
+    async function runQueuedDownload(queueItem) {
+        const visibleBook = getVisibleBookForGalleryId(queueItem.galleryId);
+        const isCurrentBookPage = !visibleBook && String(getCurrentGalleryId()) === String(queueItem.galleryId);
+        const downloadProgress = visibleBook ? createBookDownloadProgress(visibleBook) : null;
+        const downloadState = isCurrentBookPage ? createBookPageDownloadState('DOWNLOAD') : createListDownloadState(downloadProgress);
+
+        downloadState.queueItemId = queueItem.id;
+        activeQueuedDownloads.set(String(queueItem.galleryId), downloadState);
+        if (isCurrentBookPage) {
+            activeBookPageDownload = downloadState;
             showBookPageDownloadProgress();
-            const [gg, galleryInfo] = await Promise.all([
-                waitForHitomiGg(),
-                loadCurrentBookPageGalleryInfo(galleryId, downloadState)
-            ]);
-            throwIfDownloadCanceled(downloadState);
+        }
+        if (visibleBook) {
+            activeListDownloads.set(String(queueItem.galleryId), downloadState);
+            updateListDownloadTitle();
+        }
 
-            if (galleryInfo.type === 'anime') {
+        startDownloadQueueHeartbeat(downloadState);
+        try {
+            if (isCurrentBookPage) {
+                updateBookPageDownloadProgress(0, 'Loading...');
+            } else if (downloadProgress) {
+                updateBookDownloadProgress(downloadProgress, 'Loading...', 0);
+            } else {
+                showListDownloadNotice(`Downloading ${queueItem.title || queueItem.galleryId}`);
+            }
+
+            const galleryInfo = await buildAndSaveGalleryArchive(queueItem, downloadState, (text, percent) => {
+                if (isCurrentBookPage) {
+                    updateBookPageDownloadProgress(percent, text);
+                } else if (downloadProgress) {
+                    updateBookDownloadProgress(downloadProgress, text, percent);
+                }
+            });
+
+            markQueuedDownloadCompleted(queueItem, galleryInfo, visibleBook);
+            if (isCurrentBookPage) {
                 hideBookPageDownloadProgress();
-                setDLButtonText('ANIME NOT SUPPORTED');
-                restoreDLButtonTextWhenIdle(downloadState, 1800);
-                return false;
+                setDLButtonText('DOWNLOADED');
+                if (await loadCloseBookPageAfterDownload()) {
+                    closeCurrentTab();
+                }
+            } else if (downloadProgress) {
+                finishBookDownloadProgress(downloadProgress, 'Downloaded', bookDownloadDoneClassName);
+                window.setTimeout(() => hideBookDownloadProgress(downloadProgress), 1400);
+            } else {
+                showListDownloadNotice('Downloaded');
             }
-
-            const zip = new JSZip();
-            const title = getDownloadFileNameFromBookPageDocument(document, galleryInfo, galleryId);
-
-            for (let i = 0; i < galleryInfo.files.length; i++) {
-                const image = galleryInfo.files[i];
-                const url = urlFromUrlFromHash(image, 'webp', 'webp', undefined, gg);
-                const imageName = image.name.replace(/[^.]*$/, 'webp');
-
-                zip.file(imageName, await retryDownloadBlob(url, downloadState), { binary: true });
-                updateBookPageDownloadProgress((i + 1) / galleryInfo.files.length * 100, `${i + 1} / ${galleryInfo.files.length}`);
-                await wait(1000, downloadState);
-            }
-
-            throwIfDownloadCanceled(downloadState);
-            const zipBlob = await zip.generateAsync({ type: 'blob' });
-            throwIfDownloadCanceled(downloadState);
-            saveAs(zipBlob, `${title}.zip`);
-            throwIfDownloadCanceled(downloadState);
-            hideBookPageDownloadProgress();
-            markCurrentBookDownloaded(galleryInfo, galleryId);
-            if (await loadCloseBookPageAfterDownload()) {
-                closeCurrentTab();
-            }
+            await markQueuedDownload(queueItem.id, {
+                status: 'done',
+                finishedAt: new Date().toISOString(),
+                heartbeatAt: null,
+                workerId: null,
+                error: ''
+            });
             return true;
         } catch (e) {
-            if (isDownloadCanceledError(e)) {
-                return false;
-            }
+            const canceled = isDownloadCanceledError(e);
+            const animeNotSupported = isAnimeNotSupportedError(e);
+            if (!canceled && !animeNotSupported) console.error(e);
+            const failureText = animeNotSupported ? 'Anime not supported' : 'Download failed';
 
-            console.error(e);
-            hideBookPageDownloadProgress();
-            setDLButtonText('DOWNLOAD FAILED');
-            restoreDLButtonTextWhenIdle(downloadState, 1800);
+            if (isCurrentBookPage) {
+                hideBookPageDownloadProgress();
+                setDLButtonText(canceled ? 'CANCELED' : animeNotSupported ? 'ANIME NOT SUPPORTED' : 'DOWNLOAD FAILED');
+                restoreDLButtonTextWhenIdle(downloadState, 1800);
+            } else if (downloadProgress) {
+                finishBookDownloadProgress(downloadProgress, canceled ? 'Canceled' : failureText, canceled ? bookDownloadCanceledClassName : bookDownloadErrorClassName);
+                window.setTimeout(() => hideBookDownloadProgress(downloadProgress), 1800);
+            } else {
+                showListDownloadNotice(canceled ? 'Canceled' : failureText);
+            }
+            await markQueuedDownload(queueItem.id, {
+                status: canceled ? 'canceled' : 'error',
+                finishedAt: new Date().toISOString(),
+                heartbeatAt: null,
+                workerId: null,
+                error: canceled ? '' : String(e?.message || e)
+            });
             return false;
         } finally {
+            stopDownloadQueueHeartbeat(downloadState);
+            activeQueuedDownloads.delete(String(queueItem.galleryId));
             if (activeBookPageDownload === downloadState) {
                 activeBookPageDownload = null;
             }
+            if (activeListDownloads.get(String(queueItem.galleryId)) === downloadState) {
+                activeListDownloads.delete(String(queueItem.galleryId));
+                updateListDownloadTitle();
+            }
+            scheduleDownloadQueueWorker();
         }
+    }
+
+    async function claimNextQueuedDownload() {
+        return updateDownloadQueue(queue => {
+            const runningCount = queue.items.filter(item => item.status === 'running').length;
+            if (runningCount >= maxGlobalDownloadCount) return null;
+
+            const item = queue.items.find(candidate => candidate.status === 'pending');
+            if (!item) return null;
+
+            const now = new Date().toISOString();
+            Object.assign(item, {
+                status: 'running',
+                updatedAt: now,
+                startedAt: now,
+                heartbeatAt: now,
+                workerId: downloadQueueWorkerId,
+                error: ''
+            });
+            return { ...item };
+        });
+    }
+
+    async function processDownloadQueue() {
+        if (downloadQueueWorkerRunning) return;
+
+        downloadQueueWorkerRunning = true;
+        try {
+            while (activeQueuedDownloads.size < maxGlobalDownloadCount) {
+                const item = await claimNextQueuedDownload();
+                if (!item) break;
+
+                runQueuedDownload(item).catch(() => {});
+            }
+        } finally {
+            downloadQueueWorkerRunning = false;
+        }
+    }
+
+    function scheduleDownloadQueueWorker() {
+        processDownloadQueue().catch(() => {});
+        syncVisibleQueuedBookBadges().catch(() => {});
+    }
+
+    function installDownloadQueueWorker() {
+        if (downloadQueueWorkerTimer) return;
+
+        scheduleDownloadQueueWorker();
+        downloadQueueWorkerTimer = window.setInterval(() => {
+            scheduleDownloadQueueWorker();
+        }, downloadQueueWorkerInterval);
+    }
+
+    async function toggleQueuedDownload(target) {
+        const activeDownload = activeQueuedDownloads.get(String(target.galleryId));
+        if (activeDownload) {
+            if (activeDownload === activeBookPageDownload) {
+                cancelBookPageDownload(activeDownload);
+            } else {
+                cancelListDownload(activeDownload);
+            }
+            return 'canceled';
+        }
+
+        const result = await enqueueDownload(target);
+        scheduleDownloadQueueWorker();
+        return result.action;
+    }
+
+    function showDownloadQueueAction(target, action) {
+        const messages = {
+            queued: 'Queued',
+            removed: 'Removed from queue',
+            canceled: 'Canceled',
+            'already-running': 'Downloading in another tab'
+        };
+        const message = messages[action];
+        if (!message) return;
+
+        if (target.source === 'book' && String(getCurrentGalleryId()) === String(target.galleryId)) {
+            const previousText = getDLButtonText();
+            setDLButtonText(message.toUpperCase());
+            window.setTimeout(() => {
+                if (!activeQueuedDownloads.has(String(target.galleryId))) {
+                    setDLButtonText(action === 'queued' ? 'QUEUED' : action === 'already-running' ? previousText : 'DOWNLOAD');
+                }
+            }, 1200);
+            return;
+        }
+
+        const visibleBook = getVisibleBookForGalleryId(target.galleryId);
+        if (visibleBook) {
+            if (action === 'queued') {
+                showQueuedBookBadge(visibleBook);
+                return;
+            }
+
+            const progress = createBookDownloadProgress(visibleBook);
+            finishBookDownloadProgress(progress, message, action === 'canceled' ? bookDownloadCanceledClassName : bookDownloadDoneClassName);
+            window.setTimeout(() => hideBookDownloadProgress(progress), 1000);
+            return;
+        }
+
+        showListDownloadNotice(message);
+    }
+
+    async function handleQueuedBookPageDownload() {
+        const target = getCurrentBookQueueTarget();
+        if (!target) return false;
+
+        const action = await toggleQueuedDownload(target);
+        showDownloadQueueAction(target, action);
+        return true;
+    }
+
+    async function handleQueuedFocusedBookDownload() {
+        const book = getFocusedBook();
+        if (!book) return false;
+
+        const target = getBookQueueTarget(book);
+        if (!target) return false;
+
+        const action = await toggleQueuedDownload(target);
+        showDownloadQueueAction(target, action);
+        return true;
     }
 
     function getListDownloadProgressStack() {
@@ -2074,6 +2510,7 @@
 
         label.className = bookDownloadProgressLabelClassName;
         book.querySelectorAll(`:scope > .${bookDownloadProgressLabelClassName}`).forEach(elem => elem.remove());
+        queuedBookProgress.delete(book);
         book.classList.remove(bookDownloadDoneClassName, bookDownloadCanceledClassName, bookDownloadErrorClassName);
         book.classList.add(bookDownloadProgressClassName);
         book.style.setProperty('--hitomi-tweak-download-percent', '0%');
@@ -2099,6 +2536,7 @@
         if (!downloadProgress.label.isConnected) return;
 
         downloadProgress.label.remove();
+        queuedBookProgress.delete(downloadProgress.book);
         downloadProgress.book.classList.remove(
             bookDownloadProgressClassName,
             bookDownloadDoneClassName,
@@ -2108,9 +2546,51 @@
         downloadProgress.book.style.removeProperty('--hitomi-tweak-download-percent');
     }
 
+    function showQueuedBookBadge(book) {
+        if (!book?.isConnected) return null;
+
+        const existing = queuedBookProgress.get(book);
+        if (existing?.label.isConnected) {
+            updateBookDownloadProgress(existing, 'Queued', 0);
+            return existing;
+        }
+
+        const progress = createBookDownloadProgress(book);
+        updateBookDownloadProgress(progress, 'Queued', 0);
+        queuedBookProgress.set(book, progress);
+        return progress;
+    }
+
+    async function syncVisibleQueuedBookBadges() {
+        const pendingIds = new Set((await loadDownloadQueue()).items
+            .filter(item => item.status === 'pending')
+            .map(item => String(item.galleryId)));
+
+        for (const [book, progress] of Array.from(queuedBookProgress.entries())) {
+            const galleryId = getBookIdFromElement(book);
+            if (!book.isConnected || !galleryId || !pendingIds.has(galleryId)) {
+                hideBookDownloadProgress(progress);
+                queuedBookProgress.delete(book);
+            }
+        }
+
+        getBooks().forEach(book => {
+            const galleryId = getBookIdFromElement(book);
+            if (galleryId && pendingIds.has(galleryId) && !activeQueuedDownloads.has(galleryId)) {
+                showQueuedBookBadge(book);
+            }
+        });
+    }
+
     function createDownloadCanceledError() {
         const error = new Error('Download canceled.');
         error.name = downloadCanceledErrorName;
+        return error;
+    }
+
+    function createAnimeNotSupportedError() {
+        const error = new Error('Anime not supported.');
+        error.name = downloadAnimeNotSupportedErrorName;
         return error;
     }
 
@@ -2122,6 +2602,10 @@
 
     function isDownloadCanceledError(error) {
         return error?.name === downloadCanceledErrorName;
+    }
+
+    function isAnimeNotSupportedError(error) {
+        return error?.name === downloadAnimeNotSupportedErrorName;
     }
 
     function wait(ms, downloadState) {
@@ -2339,6 +2823,8 @@
         return {
             canceled: false,
             cancelWait: null,
+            heartbeatTimer: null,
+            queueItemId: null,
             progress: downloadProgress,
             xhr: null
         };
@@ -2363,88 +2849,18 @@
         downloadState.canceled = true;
         downloadState.cancelWait?.();
         downloadState.xhr?.abort();
-        finishBookDownloadProgress(downloadState.progress, 'Canceled', bookDownloadCanceledClassName);
-        window.setTimeout(() => hideBookDownloadProgress(downloadState.progress), 1000);
-    }
-
-    async function downloadFocusedBookFromList() {
-        const book = focusedBook;
-        if (!book) return false;
-
-        const galleryId = getBookIdFromElement(book);
-        if (!galleryId) return false;
-
-        if (activeListDownloads.has(galleryId)) {
-            cancelListDownload(activeListDownloads.get(galleryId));
-            return false;
+        if (downloadState.heartbeatTimer) {
+            window.clearInterval(downloadState.heartbeatTimer);
         }
-
-        if (activeListDownloads.size >= maxListDownloadCount) {
-            showListDownloadNotice(`Up to ${maxListDownloadCount} list downloads can run at once.`);
-            return false;
-        }
-
-        const downloadProgress = createBookDownloadProgress(book);
-        const downloadState = createListDownloadState(downloadProgress);
-        activeListDownloads.set(galleryId, downloadState);
-        updateListDownloadTitle();
-
-        try {
-            // The list page only has a gallery id. galleryinfo provides files and metadata
-            // needed both for image URLs and the final archive name.
-            updateBookDownloadProgress(downloadProgress, 'Loading...', 0);
-            const [gg, galleryInfo] = await Promise.all([
-                waitForHitomiGg(),
-                loadGalleryInfo(galleryId)
-            ]);
-            throwIfDownloadCanceled(downloadState);
-
-            if (galleryInfo.type === 'anime') {
-                finishBookDownloadProgress(downloadProgress, 'Anime not supported', bookDownloadErrorClassName);
-                window.setTimeout(() => hideBookDownloadProgress(downloadProgress), 1800);
-                return false;
-            }
-
-            const zip = new JSZip();
-            const title = getDownloadFileNameFromBookPageDocument(document, galleryInfo, galleryId);
-
-            for (let i = 0; i < galleryInfo.files.length; i++) {
-                const image = galleryInfo.files[i];
-                const url = urlFromUrlFromHash(image, 'webp', 'webp', undefined, gg);
-                const imageName = image.name.replace(/[^.]*$/, 'webp');
-
-                updateBookDownloadProgress(downloadProgress, `${i + 1} / ${galleryInfo.files.length}`, i / galleryInfo.files.length * 100);
-                zip.file(imageName, await retryDownloadBlob(url, downloadState), { binary: true });
-                await wait(1000, downloadState);
-            }
-
-            throwIfDownloadCanceled(downloadState);
-            updateBookDownloadProgress(downloadProgress, 'Zipping...', 100);
-            const zipBlob = await zip.generateAsync({ type: 'blob' });
-            throwIfDownloadCanceled(downloadState);
-            saveAs(zipBlob, `${title}.zip`);
-            throwIfDownloadCanceled(downloadState);
-            markListBookDownloaded(book, galleryInfo);
-            finishBookDownloadProgress(downloadProgress, 'Downloaded', bookDownloadDoneClassName);
-            window.setTimeout(() => hideBookDownloadProgress(downloadProgress), 1400);
-            return true;
-        } catch (e) {
-            if (isDownloadCanceledError(e)) {
-                return false;
-            }
-
-            console.error(e);
-            finishBookDownloadProgress(downloadProgress, 'Download failed', bookDownloadErrorClassName);
-            return false;
-        } finally {
-            activeListDownloads.delete(galleryId);
-            updateListDownloadTitle();
+        if (downloadState.progress) {
+            finishBookDownloadProgress(downloadState.progress, 'Canceled', bookDownloadCanceledClassName);
+            window.setTimeout(() => hideBookDownloadProgress(downloadState.progress), 1000);
         }
     }
 
     function installDownloadNavigationGuard() {
         window.addEventListener('beforeunload', e => {
-            if (!activeBookPageDownload && activeListDownloads.size === 0) return;
+            if (!activeBookPageDownload && activeListDownloads.size === 0 && activeQueuedDownloads.size === 0) return;
 
             e.preventDefault();
             e.returnValue = '';
@@ -2728,13 +3144,13 @@
 
             e.preventDefault();
             if (getFocusedBook()) {
-                downloadFocusedBookFromList();
+                handleQueuedFocusedBookDownload();
                 return;
             }
 
             const dlButton = getDLButton();
             if (dlButton) {
-                downloadBook(dlButton);
+                handleQueuedBookPageDownload();
             }
             return;
         }
@@ -2877,6 +3293,7 @@
         installEnhancer();
         installDownloadNavigationGuard();
         installHistory();
+        installDownloadQueueWorker();
         await installFilter();
     }
 
