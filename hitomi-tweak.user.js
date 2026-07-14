@@ -1602,20 +1602,6 @@
                 .join(', ');
         }
 
-        function getBookIdFromText(text) {
-            return String(text || '').replace(/\.[^/.]+$/, '').match(/(\d+)$/)?.[1] || '';
-        }
-
-        function getBookIdFromHistoryEntry(key, entry) {
-            return getBookIdFromText(entry?.url) || getBookIdFromText(key);
-        }
-
-        function getBookUrlFromHistoryEntry(key, entry) {
-            if (entry?.url) return new URL(entry.url, location.href).href;
-            if (String(key).startsWith('/')) return new URL(key, location.origin).href;
-            return '';
-        }
-
         function formatDownloadedAt(value) {
             if (!value) return '';
 
@@ -1761,23 +1747,18 @@
             return { title, group, author };
         }
 
-        function createRowsFromHistory(history) {
-            return Object.entries(history)
-                .map(([key, entry]) => {
-                    const bookId = getBookIdFromHistoryEntry(key, entry);
-                    const metadataHydrated = Boolean(entry?.metadataHydrated);
-
-                    return {
-                        key,
-                        bookId,
-                        title: normalizeMetadataText(entry?.title),
-                        group: normalizeMetadataText(entry?.group),
-                        author: normalizeMetadataText(entry?.author),
-                        url: getBookUrlFromHistoryEntry(key, entry),
-                        downloadedAt: normalizeMetadataText(entry?.downloadedAt),
-                        metadataStatus: metadataHydrated ? 'stored' : 'pending'
-                    };
-                })
+        function createRowsFromUnified(items) {
+            return items
+                .map(item => ({
+                    key: item.galleryId,
+                    bookId: item.galleryId,
+                    title: item.title,
+                    group: item.group,
+                    author: item.author,
+                    url: item.url,
+                    downloadedAt: item.downloadedAt,
+                    metadataStatus: item.metadataHydrated ? 'stored' : 'pending'
+                }))
                 .filter(row => row.bookId || row.url || row.title);
         }
 
@@ -2182,19 +2163,13 @@
                     const metadata = metadataFromGalleryInfo(galleryInfo, row.title);
 
                     Object.assign(row, metadata, { metadataStatus: 'loaded' });
-                    // Re-read before every row update so a concurrent download completion
-                    // cannot be erased by this page's metadata enrichment write.
-                    const fresh = await loadDownloadHistory();
-                    fresh[row.key] = {
-                        ...(fresh[row.key] || {}),
-                        bookId: row.bookId,
+                    await upsertUnifiedDownload(row.bookId, {
                         title: row.title,
                         group: row.group,
                         author: row.author,
-                        url: row.url,
-                        metadataHydrated: true
-                    };
-                    await saveDownloadHistory(fresh);
+                        metadataHydrated: true,
+                        downloadedAt: row.downloadedAt
+                    });
                     fetchedCount += 1;
                     render();
                 } catch (e) {
@@ -2228,8 +2203,8 @@
         }
 
         await loadNameMap();
-        const history = await loadDownloadHistory();
-        rows = createRowsFromHistory(history);
+        const model = await loadUnifiedDownloads();
+        rows = createRowsFromUnified(model.items.filter(item => item.status === 'done' || item.downloadedAt));
 
         if (!rows.length) {
             createEmptyPage();
@@ -2244,10 +2219,6 @@
             });
         }
         installQueueRefresh();
-    }
-
-    function getDownloadKey() {
-        return location.pathname.replace(/\/$/, '') || location.href;
     }
 
     function getBookTitle() {
@@ -2267,14 +2238,6 @@
         }
     }
 
-    function saveLocalDownloadHistory(history) {
-        try {
-            localStorage.setItem(downloadHistoryKey, JSON.stringify(history));
-        } catch (e) {
-            // Ignore storage failures so download actions are never blocked.
-        }
-    }
-
     async function loadDownloadHistory() {
         const localHistory = loadLocalDownloadHistory();
         const history = await GM.getValue(downloadHistoryKey, {});
@@ -2285,11 +2248,6 @@
             ...(history && typeof history === 'object' && !Array.isArray(history) ? history : {}),
             ...localHistory
         };
-    }
-
-    async function saveDownloadHistory(history) {
-        saveLocalDownloadHistory(history);
-        await GM.setValue(downloadHistoryKey, history);
     }
 
     function normalizeDownloadQueue(input) {
@@ -2559,6 +2517,60 @@
             Object.assign(item, nextChanges, { updatedAt: new Date().toISOString() });
             return item;
         });
+    }
+
+    function upsertUnifiedDownload(galleryId, changes) {
+        const normalizedGalleryId = String(galleryId);
+        return updateUnifiedDownloads(store => {
+            let item = store.items.find(candidate => candidate.galleryId === normalizedGalleryId);
+            if (!item) {
+                const now = new Date().toISOString();
+                item = {
+                    id: `gallery-${normalizedGalleryId}`,
+                    galleryId: normalizedGalleryId,
+                    url: '',
+                    title: '',
+                    group: '',
+                    author: '',
+                    source: '',
+                    status: 'done',
+                    createdAt: now,
+                    updatedAt: now,
+                    startedAt: null,
+                    finishedAt: null,
+                    downloadedAt: '',
+                    heartbeatAt: null,
+                    workerId: null,
+                    error: '',
+                    metadataHydrated: false
+                };
+                store.items.push(item);
+            }
+
+            const nextChanges = typeof changes === 'function' ? changes(item) : changes;
+            if (!nextChanges) return item;
+
+            Object.assign(item, nextChanges, { updatedAt: new Date().toISOString() });
+            return item;
+        });
+    }
+
+    function recordUnifiedDownloadDone({ galleryId, url, title, group, author, source, metadataHydrated }) {
+        const now = new Date().toISOString();
+        return upsertUnifiedDownload(galleryId, item => ({
+            status: 'done',
+            downloadedAt: now,
+            finishedAt: now,
+            heartbeatAt: null,
+            workerId: null,
+            error: '',
+            ...(url ? { url } : {}),
+            ...(title ? { title } : {}),
+            ...(group ? { group } : {}),
+            ...(author ? { author } : {}),
+            ...(source && !item.source ? { source } : {}),
+            ...(metadataHydrated ? { metadataHydrated: true } : {})
+        }));
     }
 
     function dequeueUnifiedDownload(galleryId, existingStore = null) {
@@ -3007,12 +3019,11 @@
     }
 
     function getDownloadHistoryMetadata(root, galleryInfo, galleryId, fallbackTitle) {
-        // Download history is also used by the standalone history viewer, so store the
-        // normalized metadata there instead of forcing that page to refetch every time.
+        // Store normalized metadata in the unified download record so every download
+        // path and the integrated page share the same enrichment state.
         const authors = getBookPageAuthors(root, galleryInfo);
 
         return {
-            bookId: String(galleryId || galleryInfo?.id || ''),
             title: getBookPageTitle(root, galleryInfo, galleryId) || fallbackTitle,
             group: getBookPageGroup(root, galleryInfo),
             author: authors.join(', '),
@@ -3020,22 +3031,8 @@
         };
     }
 
-    function syncDownloadHistoryEntry(key, entry) {
-        loadDownloadHistory()
-            .then(history => {
-                history[key] = entry;
-                return saveDownloadHistory(history);
-            })
-            .catch(() => {});
-    }
-
     function getBookLinkFromElement(elem) {
         return elem?.querySelector(':scope > h1.lillie a[href], :scope > h1 a[href], :scope > a[href]') || null;
-    }
-
-    function getDownloadHistoryKeyFromBook(book) {
-        const link = getBookLinkFromElement(book);
-        return link ? new URL(link.getAttribute('href'), location.href).pathname.replace(/\/$/, '') : null;
     }
 
     function setBookDownloadedIndicator(book, downloaded) {
@@ -3045,14 +3042,13 @@
         heading.classList.toggle(downloadedBookHeadingClassName, downloaded);
     }
 
-    function applyDownloadHistoryToBooks(history) {
-        // Downloaded markers are derived from the same history used on book pages.
+    function applyDownloadedIdsToBooks(downloadedIds) {
+        // Downloaded markers are derived from the unified model used on book pages.
         // Downloaded books are folded visually to keep list pages compact, but this
-        // does not write foldedBookIds because it is history-driven state.
+        // does not write foldedBookIds because it is download-record-driven state.
         document.querySelectorAll('div.gallery-content > div').forEach(book => {
-            const key = getDownloadHistoryKeyFromBook(book);
             const bookId = getBookIdFromElement(book);
-            const downloaded = Boolean((key && history[key]) || (bookId && history[bookId]));
+            const downloaded = Boolean(bookId && downloadedIds.has(String(bookId)));
 
             setBookDownloadedIndicator(book, downloaded);
             if (downloaded) {
@@ -3062,24 +3058,26 @@
     }
 
     async function refreshDownloadIndicators() {
-        const history = await loadDownloadHistory();
-        applyDownloadHistoryToBooks(history);
+        const model = await loadUnifiedDownloads();
+        const downloadedIds = new Set(model.items
+            .filter(item => item.status === 'done' || item.downloadedAt)
+            .map(item => String(item.galleryId)));
+        applyDownloadedIdsToBooks(downloadedIds);
     }
 
     function markCurrentBookDownloaded(galleryInfo = null, galleryId = getCurrentGalleryId()) {
-        const key = getDownloadKey();
         const metadata = getDownloadHistoryMetadata(document, galleryInfo, galleryId, getBookTitle());
-        const entry = {
-            ...metadata,
+        recordUnifiedDownloadDone({
+            galleryId: String(galleryId),
             url: location.href,
-            downloadedAt: new Date().toISOString()
-        };
-        const localHistory = loadLocalDownloadHistory();
+            title: metadata.title,
+            group: metadata.group,
+            author: metadata.author,
+            source: 'book',
+            metadataHydrated: metadata.metadataHydrated
+        }).catch(() => {});
 
-        localHistory[key] = entry;
-        saveLocalDownloadHistory(localHistory);
         markDLButtonDownloaded();
-        syncDownloadHistoryEntry(key, entry);
     }
 
     function markListBookDownloaded(book, galleryInfo) {
@@ -3088,25 +3086,29 @@
         // List-page downloads should immediately affect the visible card so users do
         // not need a reload to see the downloaded marker and compact folded state.
         const link = getBookLinkFromElement(book);
-        const key = link ? new URL(link.getAttribute('href'), location.href).pathname.replace(/\/$/, '') : String(galleryInfo.id);
         const metadata = getDownloadHistoryMetadata(document, galleryInfo, galleryInfo.id, book.querySelector('h1.lillie')?.textContent.trim() || document.title);
-        const entry = {
-            ...metadata,
-            url: link ? new URL(link.getAttribute('href'), location.href).href : location.href,
-            downloadedAt: new Date().toISOString()
-        };
-        const localHistory = loadLocalDownloadHistory();
+        recordUnifiedDownloadDone({
+            galleryId: String(galleryInfo.id),
+            url: link ? new URL(link.getAttribute('href'), location.href).href : '',
+            title: metadata.title,
+            group: metadata.group,
+            author: metadata.author,
+            source: 'list',
+            metadataHydrated: metadata.metadataHydrated
+        }).catch(() => {});
 
-        localHistory[key] = entry;
-        saveLocalDownloadHistory(localHistory);
         setBookDownloadedIndicator(book, true);
         getFilterBook(book).fold();
-        syncDownloadHistoryEntry(key, entry);
     }
 
     async function markPageIfDownloaded() {
-        const history = await loadDownloadHistory();
-        if (history[getDownloadKey()]) {
+        if (!getDLButton()) return;
+
+        const model = await loadUnifiedDownloads();
+        if (model.items.some(item =>
+            String(item.galleryId) === String(getCurrentGalleryId())
+            && (item.status === 'done' || item.downloadedAt)
+        )) {
             markDLButtonDownloaded();
         }
     }
@@ -3148,39 +3150,27 @@
         return getBooks().find(book => getBookIdFromElement(book) === String(galleryId)) || null;
     }
 
-    function getDownloadHistoryKeyFromUrl(url, galleryId) {
-        try {
-            return new URL(url, location.href).pathname.replace(/\/$/, '');
-        } catch (e) {
-            return String(galleryId);
-        }
-    }
-
     function markQueuedDownloadCompleted(queueItem, galleryInfo, visibleBook) {
-        if (visibleBook) {
-            markListBookDownloaded(visibleBook, galleryInfo);
-            return;
-        }
-
-        if (String(getCurrentGalleryId()) === String(queueItem.galleryId)) {
-            markCurrentBookDownloaded(galleryInfo, queueItem.galleryId);
-            return;
-        }
-
-        const metadataRoot = String(getCurrentGalleryId()) === String(queueItem.galleryId) ? document : document.createElement('div');
-        const key = getDownloadHistoryKeyFromUrl(queueItem.url, queueItem.galleryId);
+        const isCurrentBook = String(getCurrentGalleryId()) === String(queueItem.galleryId);
+        const metadataRoot = isCurrentBook ? document : document.createElement('div');
         const metadata = getDownloadHistoryMetadata(metadataRoot, galleryInfo, queueItem.galleryId, queueItem.title || document.title);
-        const entry = {
-            ...metadata,
+        const write = recordUnifiedDownloadDone({
+            galleryId: String(queueItem.galleryId),
             url: queueItem.url || location.href,
-            downloadedAt: new Date().toISOString()
-        };
-        const localHistory = loadLocalDownloadHistory();
+            title: metadata.title,
+            group: metadata.group,
+            author: metadata.author,
+            source: queueItem.source,
+            metadataHydrated: metadata.metadataHydrated
+        });
 
-        localHistory[key] = entry;
-        saveLocalDownloadHistory(localHistory);
-        syncDownloadHistoryEntry(key, entry);
-        refreshDownloadIndicators().catch(() => {});
+        if (visibleBook) {
+            setBookDownloadedIndicator(visibleBook, true);
+            getFilterBook(visibleBook).fold();
+        } else if (!isCurrentBook) {
+            write.then(() => refreshDownloadIndicators()).catch(() => {});
+        }
+        return write;
     }
 
     function startDownloadQueueHeartbeat(downloadState) {
@@ -3276,7 +3266,7 @@
                 }
             });
 
-            markQueuedDownloadCompleted(queueItem, galleryInfo, visibleBook);
+            await markQueuedDownloadCompleted(queueItem, galleryInfo, visibleBook);
             if (isCurrentBookPage) {
                 hideBookPageDownloadProgress();
                 setDLButtonText('DOWNLOADED');
