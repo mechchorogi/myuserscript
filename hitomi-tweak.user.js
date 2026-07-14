@@ -38,6 +38,7 @@
     const blacklistKeys = ['author', 'language', 'series', 'tag', 'title', 'type'];
     const downloadHistoryKey = 'hitomi-tweak-download-history';
     const downloadQueueKey = 'hitomi-tweak-download-queue';
+    const unifiedDownloadsKey = 'hitomi-tweak-downloads';
     const downloadQueueLockName = 'hitomi-tweak-download-queue-lock';
     const foldedBookIdsKey = 'hitomi-tweak-folded-book-ids';
     const nameMapKey = 'hitomi-tweak-name-map';
@@ -2317,6 +2318,172 @@
         };
     }
 
+    function normalizeUnifiedDownloads(input) {
+        if (!input || typeof input !== 'object' || input.version !== 1 || !Array.isArray(input.items)) {
+            return { version: 1, items: [] };
+        }
+
+        return {
+            version: 1,
+            items: input.items
+                .filter(item => item && typeof item === 'object' && item.galleryId !== undefined && item.galleryId !== null && String(item.galleryId))
+                .map(item => {
+                    const galleryId = String(item.galleryId);
+                    return {
+                        id: String(item.id || `gallery-${galleryId}`),
+                        galleryId,
+                        url: String(item.url || ''),
+                        title: String(item.title || ''),
+                        group: String(item.group || ''),
+                        author: String(item.author || ''),
+                        source: String(item.source || ''),
+                        status: ['pending', 'running', 'done', 'error', 'canceled'].includes(item.status) ? item.status : 'pending',
+                        createdAt: String(item.createdAt || ''),
+                        updatedAt: String(item.updatedAt || ''),
+                        startedAt: item.startedAt ? String(item.startedAt) : null,
+                        finishedAt: item.finishedAt ? String(item.finishedAt) : null,
+                        downloadedAt: String(item.downloadedAt || ''),
+                        heartbeatAt: item.heartbeatAt ? String(item.heartbeatAt) : null,
+                        workerId: item.workerId ? String(item.workerId) : null,
+                        error: String(item.error || ''),
+                        metadataHydrated: Boolean(item.metadataHydrated)
+                    };
+                })
+        };
+    }
+
+    function getTrailingGalleryId(value) {
+        const path = String(value || '').split(/[?#]/, 1)[0].replace(/\.[^/.]+$/, '');
+        return path.match(/(\d+)$/)?.[1] || '';
+    }
+
+    function getHistoryGalleryId(key, entry) {
+        const bookId = entry && typeof entry === 'object' ? entry.bookId : null;
+        if (bookId !== undefined && bookId !== null && String(bookId)) return String(bookId);
+        return getTrailingGalleryId(entry && typeof entry === 'object' ? entry.url : '') || getTrailingGalleryId(key);
+    }
+
+    function getTimestamp(value) {
+        const timestamp = Date.parse(value);
+        return Number.isNaN(timestamp) ? Number.NEGATIVE_INFINITY : timestamp;
+    }
+
+    function selectHistoryRecords(history) {
+        const records = new Map();
+
+        Object.entries(history).forEach(([key, value]) => {
+            const entry = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+            const galleryId = getHistoryGalleryId(key, entry);
+            if (!galleryId) return;
+
+            const candidate = { ...entry, galleryId };
+            const current = records.get(galleryId);
+            const candidateHasMetadata = candidate.metadataHydrated === true;
+            const currentHasMetadata = current?.metadataHydrated === true;
+            if (
+                !current
+                || (candidateHasMetadata && !currentHasMetadata)
+                || (candidateHasMetadata === currentHasMetadata
+                    && getTimestamp(candidate.downloadedAt) > getTimestamp(current.downloadedAt))
+            ) {
+                records.set(galleryId, candidate);
+            }
+        });
+
+        return records;
+    }
+
+    function selectQueueRecords(items) {
+        const records = new Map();
+        const statusPriority = { running: 2, pending: 1, done: 0, error: 0, canceled: 0 };
+
+        items.forEach(item => {
+            const galleryId = String(item.galleryId || '');
+            if (!galleryId) return;
+
+            const current = records.get(galleryId);
+            const candidatePriority = statusPriority[item.status];
+            const currentPriority = current ? statusPriority[current.status] : -1;
+            if (
+                !current
+                || candidatePriority > currentPriority
+                || (candidatePriority === 0 && currentPriority === 0
+                    && getTimestamp(item.updatedAt) > getTimestamp(current.updatedAt))
+            ) {
+                records.set(galleryId, item);
+            }
+        });
+
+        return records;
+    }
+
+    function selectUnifiedRecords(items) {
+        const records = new Map();
+
+        items.forEach(item => {
+            const galleryId = String(item.galleryId || '');
+            if (!galleryId) return;
+
+            const current = records.get(galleryId);
+            if (!current || getTimestamp(item.updatedAt) > getTimestamp(current.updatedAt)) {
+                records.set(galleryId, item);
+            }
+        });
+
+        return records;
+    }
+
+    async function loadUnifiedDownloads() {
+        const [history, queue, unified] = await Promise.all([
+            loadDownloadHistory(),
+            loadDownloadQueue().then(value => prepareDownloadQueueForWrite({
+                ...value,
+                items: value.items.map(item => ({ ...item }))
+            })),
+            GM.getValue(unifiedDownloadsKey, { version: 1, items: [] }).then(normalizeUnifiedDownloads)
+        ]);
+        const historyRecords = selectHistoryRecords(history);
+        const queueRecords = selectQueueRecords(queue.items);
+        const unifiedRecords = selectUnifiedRecords(unified.items);
+        const galleryIds = new Set([
+            ...historyRecords.keys(),
+            ...queueRecords.keys(),
+            ...unifiedRecords.keys()
+        ]);
+        const items = [];
+
+        galleryIds.forEach(galleryId => {
+            const historyRecord = historyRecords.get(galleryId);
+            const queueRecord = queueRecords.get(galleryId);
+            const unifiedRecord = unifiedRecords.get(galleryId);
+
+            items.push({
+                id: `gallery-${galleryId}`,
+                galleryId: String(galleryId),
+                url: unifiedRecord?.url || queueRecord?.url || historyRecord?.url || '',
+                title: unifiedRecord?.title || historyRecord?.title || queueRecord?.title || '',
+                group: unifiedRecord?.group || historyRecord?.group || '',
+                author: unifiedRecord?.author || historyRecord?.author || '',
+                source: queueRecord?.source || unifiedRecord?.source || '',
+                status: unifiedRecord?.status || queueRecord?.status || (historyRecord ? 'done' : 'pending'),
+                createdAt: unifiedRecord?.createdAt || queueRecord?.createdAt || '',
+                updatedAt: unifiedRecord?.updatedAt || queueRecord?.updatedAt || '',
+                startedAt: unifiedRecord?.startedAt || queueRecord?.startedAt || null,
+                finishedAt: unifiedRecord?.finishedAt || queueRecord?.finishedAt || null,
+                downloadedAt: historyRecord?.downloadedAt
+                    || unifiedRecord?.downloadedAt
+                    || (queueRecord?.status === 'done' ? queueRecord.finishedAt : '')
+                    || '',
+                heartbeatAt: unifiedRecord?.heartbeatAt || queueRecord?.heartbeatAt || null,
+                workerId: unifiedRecord?.workerId || queueRecord?.workerId || null,
+                error: unifiedRecord?.error || queueRecord?.error || '',
+                metadataHydrated: historyRecord?.metadataHydrated === true || unifiedRecord?.metadataHydrated === true
+            });
+        });
+
+        return normalizeUnifiedDownloads({ version: 1, items });
+    }
+
     async function loadDownloadQueue() {
         return normalizeDownloadQueue(await GM.getValue(downloadQueueKey, { version: 1, items: [] }));
     }
@@ -3990,5 +4157,7 @@
         await installFilter();
     }
 
+    // Temporary Step 3 verification hook; remove at Step 6.
+    unsafeWindow.hitomiTweakUnifiedDownloads = () => loadUnifiedDownloads();
     main().catch(() => {});
 })();
