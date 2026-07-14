@@ -1579,19 +1579,19 @@
             { key: 'title', label: 'title' },
             { key: 'group', label: 'group' },
             { key: 'author', label: 'author' },
-            { key: 'downloadedAt', label: 'downloaded at' }
+            { key: 'status', label: 'status' },
+            { key: 'updatedAt', label: 'updated at' }
         ];
         let rows = [];
         let selectedIndex = -1;
-        let sortState = { key: 'bookId', direction: 'desc' };
+        let sortState = { key: 'status', direction: 'asc' };
         let statusElem = null;
         let tbodyElem = null;
         const headerElems = new Map();
-        let queueTbodyElem = null;
-        let queueCountElem = null;
-        let queueEmptyElem = null;
-        let queueSnapshot = null;
-        let queueRefreshTimer = null;
+        let lastSnapshot = null;
+        let downloadsRefreshTimer = null;
+        let tableWrapElem = null;
+        let emptyElem = null;
 
         function resolveJapaneseNameList(text, kind) {
             return normalizeMetadataText(text)
@@ -1611,20 +1611,6 @@
             return date.toLocaleString();
         }
 
-        function sortQueueItems(items) {
-            const statusPriority = { running: 0, pending: 1, error: 2, canceled: 3, done: 4 };
-
-            return [...items].sort((a, b) => {
-                const statusDifference = statusPriority[a.status] - statusPriority[b.status];
-                if (statusDifference !== 0) return statusDifference;
-
-                if (a.status === 'pending') {
-                    return Date.parse(a.createdAt) - Date.parse(b.createdAt);
-                }
-                return Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
-            });
-        }
-
         function cancelQueuedDownload(item) {
             const activeDownload = activeQueuedDownloads.get(String(item.galleryId));
             if (!activeDownload) return;
@@ -1636,94 +1622,34 @@
             }
         }
 
-        function createQueueRow(item) {
-            const tr = document.createElement('tr');
-            const bookIdTd = document.createElement('td');
-            const titleTd = document.createElement('td');
-            const statusTd = document.createElement('td');
-            const updatedAtTd = document.createElement('td');
-            const actionTd = document.createElement('td');
-            const statusBadge = document.createElement('span');
-
-            if (item.url) {
-                const link = document.createElement('a');
-                link.href = item.url;
-                link.target = '_blank';
-                link.rel = 'noopener noreferrer';
-                link.textContent = item.galleryId;
-                bookIdTd.appendChild(link);
-            } else {
-                bookIdTd.textContent = item.galleryId;
-            }
-
-            titleTd.textContent = item.title || item.galleryId;
-            statusBadge.className = `hitomi-download-page-status-badge hitomi-download-page-status-${item.status}`;
-            statusBadge.textContent = item.status;
-            statusTd.appendChild(statusBadge);
-            updatedAtTd.textContent = formatDownloadedAt(item.updatedAt);
-
-            if (item.status === 'pending') {
-                const removeButton = document.createElement('button');
-                removeButton.type = 'button';
-                removeButton.textContent = 'Remove';
-                removeButton.addEventListener('click', async () => {
-                    removeButton.disabled = true;
-                    try {
-                        await dequeueUnifiedDownload(item.galleryId);
-                        await refreshQueue();
-                    } catch (e) {
-                        removeButton.disabled = false;
-                        console.error(e);
-                    }
-                });
-                actionTd.appendChild(removeButton);
-            } else if (item.status === 'running' && activeQueuedDownloads.has(String(item.galleryId))) {
-                const cancelButton = document.createElement('button');
-                cancelButton.type = 'button';
-                cancelButton.textContent = 'Cancel';
-                cancelButton.addEventListener('click', () => {
-                    cancelButton.disabled = true;
-                    cancelQueuedDownload(item);
-                });
-                actionTd.appendChild(cancelButton);
-            }
-
-            tr.append(bookIdTd, titleTd, statusTd, updatedAtTd, actionTd);
-            return tr;
-        }
-
-        function renderQueue(items) {
-            queueCountElem.textContent = `(${items.length})`;
-            queueEmptyElem.hidden = items.length > 0;
-            queueTbodyElem.closest('.hitomi-download-page-queue-table-wrap').hidden = items.length === 0;
-            queueTbodyElem.replaceChildren(...items.map(createQueueRow));
-        }
-
-        async function refreshQueue() {
+        async function refreshDownloads() {
             if (document.hidden) return;
 
-            const store = await loadUnifiedDownloads();
-            const now = Date.now();
-            const items = sortQueueItems(store.items.filter(item =>
-                item.status === 'pending'
-                || item.status === 'running'
-                || (isTerminalDownloadQueueStatus(item.status)
-                    && item.finishedAt
-                    && now - getTimestamp(item.finishedAt) <= downloadQueueTerminalTtlMs)
-            ));
-            const nextSnapshot = JSON.stringify(items);
-            if (nextSnapshot === queueSnapshot) return;
+            const selectedBookId = getSelectedRow()?.bookId;
+            const model = await loadUnifiedDownloads();
+            rows = createRowsFromUnified(model.items);
+            sortRows();
+            const nextSnapshot = JSON.stringify(rows.map(row => ({ ...row })));
+            if (nextSnapshot === lastSnapshot) return;
 
-            queueSnapshot = nextSnapshot;
-            renderQueue(items);
+            lastSnapshot = nextSnapshot;
+            if (selectedBookId) selectedIndex = rows.findIndex(row => row.bookId === selectedBookId);
+            if (selectedIndex < 0 && rows.length) selectedIndex = 0;
+            if (!rows.length) selectedIndex = -1;
+            if (tableWrapElem && emptyElem) {
+                tableWrapElem.hidden = rows.length === 0;
+                emptyElem.hidden = rows.length > 0;
+            }
+            render();
+            setStatus(`${rows.length} books`);
         }
 
-        function installQueueRefresh() {
-            if (queueRefreshTimer) return;
+        function installDownloadsRefresh() {
+            if (downloadsRefreshTimer) return;
 
-            refreshQueue().catch(error => console.error(error));
-            queueRefreshTimer = window.setInterval(() => {
-                refreshQueue().catch(error => console.error(error));
+            refreshDownloads().catch(error => console.error(error));
+            downloadsRefreshTimer = window.setInterval(() => {
+                refreshDownloads().catch(error => console.error(error));
             }, downloadPageQueueRefreshInterval);
         }
 
@@ -1757,7 +1683,12 @@
                     author: item.author,
                     url: item.url,
                     downloadedAt: item.downloadedAt,
-                    metadataStatus: item.metadataHydrated ? 'stored' : 'pending'
+                    status: item.status,
+                    updatedAt: item.updatedAt || item.downloadedAt || item.finishedAt || '',
+                    createdAt: item.createdAt,
+                    finishedAt: item.finishedAt,
+                    galleryId: item.galleryId,
+                    metadataHydrated: item.metadataHydrated
                 }))
                 .filter(row => row.bookId || row.url || row.title);
         }
@@ -1765,11 +1696,19 @@
         function getDisplayValue(row, key) {
             if (key === 'group') return resolveJapaneseNameList(row.group, 'group');
             if (key === 'author') return resolveJapaneseNameList(row.author, 'author');
-            if (key === 'downloadedAt') return formatDownloadedAt(row.downloadedAt);
+            if (key === 'updatedAt') return formatDownloadedAt(row.updatedAt);
+            if (key === 'status') return row.status;
             return String(row[key] || '');
         }
 
         function compareValues(a, b, key) {
+            if (key === 'status') {
+                const statusPriority = { running: 0, pending: 1, error: 2, canceled: 3, done: 4 };
+                const statusDifference = statusPriority[a.status] - statusPriority[b.status];
+                if (statusDifference !== 0) return statusDifference;
+                if (a.status === 'pending') return getTimestamp(a.createdAt) - getTimestamp(b.createdAt);
+                return getTimestamp(b.updatedAt) - getTimestamp(a.updatedAt);
+            }
             if (key === 'bookId') {
                 const left = Number(a.bookId);
                 const right = Number(b.bookId);
@@ -1805,7 +1744,7 @@
             }
 
             selectedIndex = Math.max(0, Math.min(rows.length - 1, index));
-            renderBody();
+            renderBody(true);
         }
 
         function openSelectedRow() {
@@ -1828,10 +1767,12 @@
             });
         }
 
-        function renderBody() {
+        function renderBody(scrollToSelection = false) {
             tbodyElem.replaceChildren(...rows.map((row, index) => {
                 const tr = document.createElement('tr');
                 tr.classList.toggle(selectedRowClassName, index === selectedIndex);
+                tr.dataset.galleryId = String(row.galleryId || row.bookId);
+                tr.dataset.status = row.status;
                 tr.tabIndex = -1;
                 tr.addEventListener('click', () => focusRow(index));
 
@@ -1844,16 +1785,51 @@
                         link.rel = 'noopener noreferrer';
                         link.textContent = row.bookId || row.url;
                         td.appendChild(link);
+                    } else if (column.key === 'status') {
+                        const statusBadge = document.createElement('span');
+                        statusBadge.className = `hitomi-download-page-status-badge hitomi-download-page-status-${row.status}`;
+                        statusBadge.textContent = row.status;
+                        td.appendChild(statusBadge);
                     } else {
                         td.textContent = getDisplayValue(row, column.key);
                     }
                     tr.appendChild(td);
                 });
 
+                const actionTd = document.createElement('td');
+                if (row.status === 'pending') {
+                    const removeButton = document.createElement('button');
+                    removeButton.type = 'button';
+                    removeButton.textContent = 'Remove';
+                    removeButton.addEventListener('click', async () => {
+                        removeButton.disabled = true;
+                        try {
+                            await dequeueUnifiedDownload(row.galleryId);
+                            await refreshDownloads();
+                        } catch (e) {
+                            removeButton.disabled = false;
+                            console.error(e);
+                        }
+                    });
+                    actionTd.appendChild(removeButton);
+                } else if (row.status === 'running' && activeQueuedDownloads.has(String(row.galleryId))) {
+                    const cancelButton = document.createElement('button');
+                    cancelButton.type = 'button';
+                    cancelButton.textContent = 'Cancel';
+                    cancelButton.addEventListener('click', () => {
+                        cancelButton.disabled = true;
+                        cancelQueuedDownload({ galleryId: row.galleryId });
+                    });
+                    actionTd.appendChild(cancelButton);
+                }
+                tr.appendChild(actionTd);
+
                 return tr;
             }));
 
-            tbodyElem.querySelector(`.${selectedRowClassName}`)?.scrollIntoView({ block: 'nearest' });
+            if (scrollToSelection) {
+                tbodyElem.querySelector(`.${selectedRowClassName}`)?.scrollIntoView({ block: 'nearest' });
+            }
             renderHeaders();
         }
 
@@ -1863,7 +1839,7 @@
             sortRows();
             if (selectedBookId) selectedIndex = rows.findIndex(row => row.bookId === selectedBookId);
             if (selectedIndex === -1 && rows.length) selectedIndex = 0;
-            renderBody();
+            renderBody(false);
         }
 
         function setSort(key) {
@@ -1877,7 +1853,7 @@
             sortRows();
             selectedIndex = selectedBookId ? rows.findIndex(row => row.bookId === selectedBookId) : selectedIndex;
             if (selectedIndex < 0 && rows.length) selectedIndex = 0;
-            renderBody();
+            renderBody(true);
         }
 
         function createStyle() {
@@ -1916,67 +1892,6 @@
                     font-size: 14px;
                     text-align: right;
                 }
-                .hitomi-download-page-queue-section {
-                    margin-bottom: 24px;
-                }
-                .hitomi-download-page-queue-heading {
-                    display: flex;
-                    align-items: baseline;
-                    gap: 8px;
-                    margin: 0 0 10px;
-                    font-size: 20px;
-                }
-                .hitomi-download-page-queue-count {
-                    color: #52606d;
-                    font-size: 14px;
-                    font-weight: 400;
-                }
-                .hitomi-download-page-queue-table-wrap {
-                    overflow: visible;
-                    border: 1px solid #d9e2ec;
-                    background: #fff;
-                }
-                .hitomi-download-page-queue-table {
-                    width: 100%;
-                    border-collapse: collapse;
-                    table-layout: fixed;
-                }
-                .hitomi-download-page-queue-table th,
-                .hitomi-download-page-queue-table td {
-                    padding: 8px 12px;
-                    border-bottom: 1px solid #e4e7eb;
-                    text-align: left;
-                    vertical-align: middle;
-                    font-size: 14px;
-                    line-height: 1.4;
-                    overflow-wrap: anywhere;
-                }
-                .hitomi-download-page-queue-table th {
-                    background: #e9eff5;
-                    color: #243b53;
-                    font-weight: 600;
-                }
-                .hitomi-download-page-queue-table th:nth-child(1) { width: 110px; }
-                .hitomi-download-page-queue-table th:nth-child(2) { width: 38%; }
-                .hitomi-download-page-queue-table th:nth-child(3) { width: 110px; }
-                .hitomi-download-page-queue-table th:nth-child(4) { width: 170px; }
-                .hitomi-download-page-queue-table th:nth-child(5) { width: 90px; }
-                .hitomi-download-page-queue-table tr:last-child td { border-bottom: 0; }
-                .hitomi-download-page-queue-table a { color: #1d4ed8; }
-                .hitomi-download-page-queue-table button {
-                    min-height: 30px;
-                    padding: 4px 10px;
-                    border: 1px solid #bcccdc;
-                    border-radius: 4px;
-                    background: #fff;
-                    color: #243b53;
-                    font: inherit;
-                    cursor: pointer;
-                }
-                .hitomi-download-page-queue-table button:disabled {
-                    cursor: default;
-                    opacity: 0.6;
-                }
                 .hitomi-download-page-status-badge {
                     display: inline-block;
                     padding: 2px 7px;
@@ -1989,13 +1904,6 @@
                 .hitomi-download-page-status-done { background: #dcfce7; color: #166534; }
                 .hitomi-download-page-status-error { background: #fee2e2; color: #991b1b; }
                 .hitomi-download-page-status-canceled { background: #e5e7eb; color: #4b5563; }
-                .hitomi-download-page-queue-empty {
-                    padding: 16px;
-                    border: 1px solid #d9e2ec;
-                    background: #fff;
-                    color: #7b8794;
-                    font-size: 14px;
-                }
                 .hitomi-download-page-table-wrap {
                     overflow: visible;
                     border: 1px solid #d9e2ec;
@@ -2026,11 +1934,13 @@
                     user-select: none;
                     white-space: nowrap;
                 }
-                .hitomi-download-page-table th:nth-child(1) { width: 110px; }
-                .hitomi-download-page-table th:nth-child(2) { width: 34%; }
-                .hitomi-download-page-table th:nth-child(3),
-                .hitomi-download-page-table th:nth-child(4) { width: 18%; }
-                .hitomi-download-page-table th:nth-child(5) { width: 170px; }
+                .hitomi-download-page-table th:nth-child(1) { width: 100px; }
+                .hitomi-download-page-table th:nth-child(2) { width: 30%; }
+                .hitomi-download-page-table th:nth-child(3) { width: 15%; }
+                .hitomi-download-page-table th:nth-child(4) { width: 15%; }
+                .hitomi-download-page-table th:nth-child(5) { width: 90px; }
+                .hitomi-download-page-table th:nth-child(6) { width: 160px; }
+                .hitomi-download-page-table th:nth-child(7) { width: 90px; }
                 .hitomi-download-page-table tr.${selectedRowClassName} {
                     background: #dbeafe;
                     outline: 2px solid #2563eb;
@@ -2038,6 +1948,20 @@
                 }
                 .hitomi-download-page-table tr:hover { background: #eff6ff; }
                 .hitomi-download-page-table a { color: #1d4ed8; }
+                .hitomi-download-page-table button {
+                    min-height: 30px;
+                    padding: 4px 10px;
+                    border: 1px solid #bcccdc;
+                    border-radius: 4px;
+                    background: #fff;
+                    color: #243b53;
+                    font: inherit;
+                    cursor: pointer;
+                }
+                .hitomi-download-page-table button:disabled {
+                    cursor: default;
+                    opacity: 0.6;
+                }
                 .${sortIndicatorClassName} {
                     display: inline-block;
                     min-width: 1.2em;
@@ -2054,43 +1978,6 @@
             document.head.appendChild(style);
         }
 
-        function createQueueSection() {
-            const section = document.createElement('section');
-            const heading = document.createElement('h2');
-            const headingText = document.createElement('span');
-            const tableWrap = document.createElement('div');
-            const table = document.createElement('table');
-            const thead = document.createElement('thead');
-            const headerRow = document.createElement('tr');
-
-            section.className = 'hitomi-download-page-queue-section';
-            heading.className = 'hitomi-download-page-queue-heading';
-            headingText.textContent = 'Queue';
-            queueCountElem = document.createElement('span');
-            queueCountElem.className = 'hitomi-download-page-queue-count';
-            queueCountElem.textContent = '(0)';
-            tableWrap.className = 'hitomi-download-page-queue-table-wrap';
-            tableWrap.hidden = true;
-            table.className = 'hitomi-download-page-queue-table';
-            queueTbodyElem = document.createElement('tbody');
-            queueEmptyElem = document.createElement('div');
-            queueEmptyElem.className = 'hitomi-download-page-queue-empty';
-            queueEmptyElem.textContent = 'No queued downloads.';
-
-            ['book ID', 'title', 'status', 'updated at', 'action'].forEach(label => {
-                const th = document.createElement('th');
-                th.textContent = label;
-                headerRow.appendChild(th);
-            });
-
-            heading.append(headingText, queueCountElem);
-            thead.appendChild(headerRow);
-            table.append(thead, queueTbodyElem);
-            tableWrap.appendChild(table);
-            section.append(heading, tableWrap, queueEmptyElem);
-            return section;
-        }
-
         function createPage() {
             document.title = 'Hitomi Downloads';
             document.body.replaceChildren();
@@ -2099,8 +1986,6 @@
             const page = document.createElement('main');
             const header = document.createElement('header');
             const title = document.createElement('h1');
-            const queueSection = createQueueSection();
-            const tableWrap = document.createElement('div');
             const table = document.createElement('table');
             const thead = document.createElement('thead');
             const headerRow = document.createElement('tr');
@@ -2110,9 +1995,14 @@
             title.textContent = 'Downloads';
             statusElem = document.createElement('div');
             statusElem.className = 'hitomi-download-page-status';
-            tableWrap.className = 'hitomi-download-page-table-wrap';
+            tableWrapElem = document.createElement('div');
+            tableWrapElem.className = 'hitomi-download-page-table-wrap';
+            tableWrapElem.hidden = true;
             table.className = 'hitomi-download-page-table';
             tbodyElem = document.createElement('tbody');
+            emptyElem = document.createElement('div');
+            emptyElem.className = 'hitomi-download-page-empty';
+            emptyElem.textContent = 'No downloads found.';
 
             columns.forEach(column => {
                 const th = document.createElement('th');
@@ -2125,23 +2015,16 @@
                 headerElems.set(column.key, th);
                 headerRow.appendChild(th);
             });
+            const actionTh = document.createElement('th');
+            actionTh.textContent = 'action';
+            headerRow.appendChild(actionTh);
 
             thead.appendChild(headerRow);
             table.append(thead, tbodyElem);
-            tableWrap.appendChild(table);
+            tableWrapElem.appendChild(table);
             header.append(title, statusElem);
-            page.append(header, queueSection, tableWrap);
+            page.append(header, tableWrapElem, emptyElem);
             document.body.appendChild(page);
-        }
-
-        function createEmptyPage() {
-            createPage();
-            const empty = document.createElement('div');
-
-            empty.className = 'hitomi-download-page-empty';
-            empty.textContent = 'No download history found.';
-            document.querySelector('.hitomi-download-page-table-wrap')?.replaceWith(empty);
-            setStatus('');
         }
 
         function wait(ms) {
@@ -2149,34 +2032,37 @@
         }
 
         async function hydrateMissingMetadata() {
-            const pendingRows = rows.filter(row => row.bookId && row.metadataStatus === 'pending');
-            if (!pendingRows.length) {
-                setStatus(`${rows.length} books`);
-                return;
-            }
-
+            const attemptedIds = new Set();
             let fetchedCount = 0;
-            for (const row of pendingRows) {
-                setStatus(`Loading metadata ${fetchedCount + 1} / ${pendingRows.length}`);
-                try {
-                    const galleryInfo = await loadGalleryInfo(row.bookId);
-                    const metadata = metadataFromGalleryInfo(galleryInfo, row.title);
+            while (true) {
+                const model = await loadUnifiedDownloads();
+                const target = model.items.find(item =>
+                    (item.status === 'done' || item.downloadedAt)
+                    && !item.metadataHydrated
+                    && !attemptedIds.has(String(item.galleryId))
+                    && item.status !== 'running'
+                    && item.status !== 'pending'
+                );
+                if (!target) break;
 
-                    Object.assign(row, metadata, { metadataStatus: 'loaded' });
-                    await upsertUnifiedDownload(row.bookId, {
-                        title: row.title,
-                        group: row.group,
-                        author: row.author,
+                attemptedIds.add(String(target.galleryId));
+                setStatus(`Loading metadata ${fetchedCount + 1}`);
+                try {
+                    const galleryInfo = await loadGalleryInfo(target.galleryId);
+                    const metadata = metadataFromGalleryInfo(galleryInfo, target.title);
+                    await upsertUnifiedDownload(target.galleryId, {
+                        title: metadata.title,
+                        group: metadata.group,
+                        author: metadata.author,
                         metadataHydrated: true,
-                        downloadedAt: row.downloadedAt
+                        downloadedAt: target.downloadedAt
                     });
-                    fetchedCount += 1;
-                    render();
+                    await refreshDownloads();
                 } catch (e) {
-                    row.metadataStatus = 'error';
-                    fetchedCount += 1;
+                    // attemptedIds prevents repeated failures from blocking later records.
                 }
 
+                fetchedCount += 1;
                 await wait(metadataFetchDelayMs);
             }
 
@@ -2203,22 +2089,14 @@
         }
 
         await loadNameMap();
-        const model = await loadUnifiedDownloads();
-        rows = createRowsFromUnified(model.items.filter(item => item.status === 'done' || item.downloadedAt));
-
-        if (!rows.length) {
-            createEmptyPage();
-        } else {
-            createPage();
-            window.addEventListener('keydown', handleKeydown, true);
-            render();
+        createPage();
+        window.addEventListener('keydown', handleKeydown, true);
+        await refreshDownloads();
+        hydrateMissingMetadata().catch(error => {
+            console.error(error);
             setStatus(`${rows.length} books`);
-            hydrateMissingMetadata().catch(error => {
-                console.error(error);
-                setStatus(`${rows.length} books`);
-            });
-        }
-        installQueueRefresh();
+        });
+        installDownloadsRefresh();
     }
 
     function getBookTitle() {
@@ -4272,7 +4150,5 @@
         await installFilter();
     }
 
-    // Temporary Step 3 verification hook; remove at Step 6.
-    unsafeWindow.hitomiTweakUnifiedDownloads = () => loadUnifiedDownloads();
     main().catch(() => {});
 })();
