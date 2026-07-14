@@ -55,6 +55,7 @@
     ];
     const maxGlobalDownloadCount = 4;
     const downloadQueueWorkerInterval = 2500;
+    const downloadPageQueueRefreshInterval = 2500;
     const downloadQueueHeartbeatInterval = 5000;
     const downloadQueueStaleRunningMs = 180000;
     const downloadQueueTerminalTtlMs = 60000;
@@ -1585,6 +1586,11 @@
         let statusElem = null;
         let tbodyElem = null;
         const headerElems = new Map();
+        let queueTbodyElem = null;
+        let queueCountElem = null;
+        let queueEmptyElem = null;
+        let queueSnapshot = null;
+        let queueRefreshTimer = null;
 
         function resolveJapaneseNameList(text, kind) {
             return normalizeMetadataText(text)
@@ -1616,6 +1622,121 @@
             if (Number.isNaN(date.getTime())) return normalizeMetadataText(value);
 
             return date.toLocaleString();
+        }
+
+        function sortQueueItems(items) {
+            const statusPriority = { running: 0, pending: 1, error: 2, canceled: 3, done: 4 };
+
+            return [...items].sort((a, b) => {
+                const statusDifference = statusPriority[a.status] - statusPriority[b.status];
+                if (statusDifference !== 0) return statusDifference;
+
+                if (a.status === 'pending') {
+                    return Date.parse(a.createdAt) - Date.parse(b.createdAt);
+                }
+                return Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
+            });
+        }
+
+        function cancelQueuedDownload(item) {
+            const activeDownload = activeQueuedDownloads.get(String(item.galleryId));
+            if (!activeDownload) return;
+
+            if (activeDownload === activeBookPageDownload) {
+                cancelBookPageDownload(activeDownload);
+            } else {
+                cancelListDownload(activeDownload);
+            }
+        }
+
+        function createQueueRow(item) {
+            const tr = document.createElement('tr');
+            const bookIdTd = document.createElement('td');
+            const titleTd = document.createElement('td');
+            const statusTd = document.createElement('td');
+            const updatedAtTd = document.createElement('td');
+            const actionTd = document.createElement('td');
+            const statusBadge = document.createElement('span');
+
+            if (item.url) {
+                const link = document.createElement('a');
+                link.href = item.url;
+                link.target = '_blank';
+                link.rel = 'noopener noreferrer';
+                link.textContent = item.galleryId;
+                bookIdTd.appendChild(link);
+            } else {
+                bookIdTd.textContent = item.galleryId;
+            }
+
+            titleTd.textContent = item.title || item.galleryId;
+            statusBadge.className = `hitomi-download-page-status-badge hitomi-download-page-status-${item.status}`;
+            statusBadge.textContent = item.status;
+            statusTd.appendChild(statusBadge);
+            updatedAtTd.textContent = formatDownloadedAt(item.updatedAt);
+
+            if (item.status === 'pending') {
+                const removeButton = document.createElement('button');
+                removeButton.type = 'button';
+                removeButton.textContent = 'Remove';
+                removeButton.addEventListener('click', async () => {
+                    removeButton.disabled = true;
+                    try {
+                        await removeQueuedDownload(item.id);
+                        await refreshQueue();
+                    } catch (e) {
+                        removeButton.disabled = false;
+                        console.error(e);
+                    }
+                });
+                actionTd.appendChild(removeButton);
+            } else if (item.status === 'running' && activeQueuedDownloads.has(String(item.galleryId))) {
+                const cancelButton = document.createElement('button');
+                cancelButton.type = 'button';
+                cancelButton.textContent = 'Cancel';
+                cancelButton.addEventListener('click', () => {
+                    cancelButton.disabled = true;
+                    cancelQueuedDownload(item);
+                });
+                actionTd.appendChild(cancelButton);
+            }
+
+            tr.append(bookIdTd, titleTd, statusTd, updatedAtTd, actionTd);
+            return tr;
+        }
+
+        function renderQueue(items) {
+            queueCountElem.textContent = `(${items.length})`;
+            queueEmptyElem.hidden = items.length > 0;
+            queueTbodyElem.closest('.hitomi-download-page-queue-table-wrap').hidden = items.length === 0;
+            queueTbodyElem.replaceChildren(...items.map(createQueueRow));
+        }
+
+        async function refreshQueue() {
+            if (document.hidden) return;
+
+            const queue = await loadDownloadQueue();
+            // Normalize stale and expired items on a display-only copy. Persistence
+            // remains the responsibility of workers and explicit queue actions.
+            const displayQueue = prepareDownloadQueueForWrite({
+                ...queue,
+                items: queue.items.map(item => ({ ...item }))
+            });
+            const items = sortQueueItems(displayQueue.items);
+            const nextSnapshot = JSON.stringify(items);
+            if (nextSnapshot === queueSnapshot) return;
+
+            queueSnapshot = nextSnapshot;
+            renderQueue(items);
+        }
+
+        function installQueueRefresh() {
+            if (queueRefreshTimer) return;
+
+            refreshQueue().catch(error => console.error(error));
+            queueRefreshTimer = window.setInterval(() => {
+                refreshQueue().catch(error => console.error(error));
+            }, downloadPageQueueRefreshInterval);
         }
 
         function dedupeNames(names) {
@@ -1812,6 +1933,86 @@
                     font-size: 14px;
                     text-align: right;
                 }
+                .hitomi-download-page-queue-section {
+                    margin-bottom: 24px;
+                }
+                .hitomi-download-page-queue-heading {
+                    display: flex;
+                    align-items: baseline;
+                    gap: 8px;
+                    margin: 0 0 10px;
+                    font-size: 20px;
+                }
+                .hitomi-download-page-queue-count {
+                    color: #52606d;
+                    font-size: 14px;
+                    font-weight: 400;
+                }
+                .hitomi-download-page-queue-table-wrap {
+                    overflow: visible;
+                    border: 1px solid #d9e2ec;
+                    background: #fff;
+                }
+                .hitomi-download-page-queue-table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    table-layout: fixed;
+                }
+                .hitomi-download-page-queue-table th,
+                .hitomi-download-page-queue-table td {
+                    padding: 8px 12px;
+                    border-bottom: 1px solid #e4e7eb;
+                    text-align: left;
+                    vertical-align: middle;
+                    font-size: 14px;
+                    line-height: 1.4;
+                    overflow-wrap: anywhere;
+                }
+                .hitomi-download-page-queue-table th {
+                    background: #e9eff5;
+                    color: #243b53;
+                    font-weight: 600;
+                }
+                .hitomi-download-page-queue-table th:nth-child(1) { width: 110px; }
+                .hitomi-download-page-queue-table th:nth-child(2) { width: 38%; }
+                .hitomi-download-page-queue-table th:nth-child(3) { width: 110px; }
+                .hitomi-download-page-queue-table th:nth-child(4) { width: 170px; }
+                .hitomi-download-page-queue-table th:nth-child(5) { width: 90px; }
+                .hitomi-download-page-queue-table tr:last-child td { border-bottom: 0; }
+                .hitomi-download-page-queue-table a { color: #1d4ed8; }
+                .hitomi-download-page-queue-table button {
+                    min-height: 30px;
+                    padding: 4px 10px;
+                    border: 1px solid #bcccdc;
+                    border-radius: 4px;
+                    background: #fff;
+                    color: #243b53;
+                    font: inherit;
+                    cursor: pointer;
+                }
+                .hitomi-download-page-queue-table button:disabled {
+                    cursor: default;
+                    opacity: 0.6;
+                }
+                .hitomi-download-page-status-badge {
+                    display: inline-block;
+                    padding: 2px 7px;
+                    border-radius: 999px;
+                    font-size: 12px;
+                    font-weight: 600;
+                }
+                .hitomi-download-page-status-pending { background: #fff3bf; color: #7a5d00; }
+                .hitomi-download-page-status-running { background: #dbeafe; color: #1e40af; }
+                .hitomi-download-page-status-done { background: #dcfce7; color: #166534; }
+                .hitomi-download-page-status-error { background: #fee2e2; color: #991b1b; }
+                .hitomi-download-page-status-canceled { background: #e5e7eb; color: #4b5563; }
+                .hitomi-download-page-queue-empty {
+                    padding: 16px;
+                    border: 1px solid #d9e2ec;
+                    background: #fff;
+                    color: #7b8794;
+                    font-size: 14px;
+                }
                 .hitomi-download-page-table-wrap {
                     overflow: visible;
                     border: 1px solid #d9e2ec;
@@ -1870,6 +2071,43 @@
             document.head.appendChild(style);
         }
 
+        function createQueueSection() {
+            const section = document.createElement('section');
+            const heading = document.createElement('h2');
+            const headingText = document.createElement('span');
+            const tableWrap = document.createElement('div');
+            const table = document.createElement('table');
+            const thead = document.createElement('thead');
+            const headerRow = document.createElement('tr');
+
+            section.className = 'hitomi-download-page-queue-section';
+            heading.className = 'hitomi-download-page-queue-heading';
+            headingText.textContent = 'Queue';
+            queueCountElem = document.createElement('span');
+            queueCountElem.className = 'hitomi-download-page-queue-count';
+            queueCountElem.textContent = '(0)';
+            tableWrap.className = 'hitomi-download-page-queue-table-wrap';
+            tableWrap.hidden = true;
+            table.className = 'hitomi-download-page-queue-table';
+            queueTbodyElem = document.createElement('tbody');
+            queueEmptyElem = document.createElement('div');
+            queueEmptyElem.className = 'hitomi-download-page-queue-empty';
+            queueEmptyElem.textContent = 'No queued downloads.';
+
+            ['book ID', 'title', 'status', 'updated at', 'action'].forEach(label => {
+                const th = document.createElement('th');
+                th.textContent = label;
+                headerRow.appendChild(th);
+            });
+
+            heading.append(headingText, queueCountElem);
+            thead.appendChild(headerRow);
+            table.append(thead, queueTbodyElem);
+            tableWrap.appendChild(table);
+            section.append(heading, tableWrap, queueEmptyElem);
+            return section;
+        }
+
         function createPage() {
             document.title = 'Hitomi Downloads';
             document.body.replaceChildren();
@@ -1878,6 +2116,7 @@
             const page = document.createElement('main');
             const header = document.createElement('header');
             const title = document.createElement('h1');
+            const queueSection = createQueueSection();
             const tableWrap = document.createElement('div');
             const table = document.createElement('table');
             const thead = document.createElement('thead');
@@ -1908,7 +2147,7 @@
             table.append(thead, tbodyElem);
             tableWrap.appendChild(table);
             header.append(title, statusElem);
-            page.append(header, tableWrap);
+            page.append(header, queueSection, tableWrap);
             document.body.appendChild(page);
         }
 
@@ -1992,17 +2231,17 @@
 
         if (!rows.length) {
             createEmptyPage();
-            return;
-        }
-
-        createPage();
-        window.addEventListener('keydown', handleKeydown, true);
-        render();
-        setStatus(`${rows.length} books`);
-        hydrateMissingMetadata().catch(error => {
-            console.error(error);
+        } else {
+            createPage();
+            window.addEventListener('keydown', handleKeydown, true);
+            render();
             setStatus(`${rows.length} books`);
-        });
+            hydrateMissingMetadata().catch(error => {
+                console.error(error);
+                setStatus(`${rows.length} books`);
+            });
+        }
+        installQueueRefresh();
     }
 
     function getDownloadKey() {
@@ -2142,6 +2381,12 @@
                 await saveDownloadQueue(queue);
             }
             return result;
+        });
+    }
+
+    function removeQueuedDownload(queueItemId) {
+        return updateDownloadQueue(queue => {
+            queue.items = queue.items.filter(item => !(item.id === queueItemId && item.status === 'pending'));
         });
     }
 
