@@ -39,7 +39,7 @@
     const downloadHistoryKey = 'hitomi-tweak-download-history';
     const downloadQueueKey = 'hitomi-tweak-download-queue';
     const unifiedDownloadsKey = 'hitomi-tweak-downloads';
-    const downloadQueueLockName = 'hitomi-tweak-download-queue-lock';
+    const unifiedDownloadsLockName = 'hitomi-tweak-downloads-lock';
     const foldedBookIdsKey = 'hitomi-tweak-folded-book-ids';
     const nameMapKey = 'hitomi-tweak-name-map';
     const nameMapPagePath = '/hitomi-tweak-name-map.html';
@@ -105,7 +105,7 @@
     let nameMap = { version: 1, group: {}, author: {}, series: {} };
     let queuedBookProgress = new Map();
     let titleBeforeListDownloads = null;
-    let downloadQueueWriteQueue = Promise.resolve();
+    let unifiedDownloadsWriteQueue = Promise.resolve();
     let downloadQueueWorkerTimer = null;
     let downloadQueueWorkerRunning = false;
     const downloadQueueWorkerId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -1683,7 +1683,7 @@
                 removeButton.addEventListener('click', async () => {
                     removeButton.disabled = true;
                     try {
-                        await removeQueuedDownload(item.id);
+                        await dequeueUnifiedDownload(item.galleryId);
                         await refreshQueue();
                     } catch (e) {
                         removeButton.disabled = false;
@@ -1716,14 +1716,15 @@
         async function refreshQueue() {
             if (document.hidden) return;
 
-            const queue = await loadDownloadQueue();
-            // Normalize stale and expired items on a display-only copy. Persistence
-            // remains the responsibility of workers and explicit queue actions.
-            const displayQueue = prepareDownloadQueueForWrite({
-                ...queue,
-                items: queue.items.map(item => ({ ...item }))
-            });
-            const items = sortQueueItems(displayQueue.items);
+            const store = await loadUnifiedDownloads();
+            const now = Date.now();
+            const items = sortQueueItems(store.items.filter(item =>
+                item.status === 'pending'
+                || item.status === 'running'
+                || (isTerminalDownloadQueueStatus(item.status)
+                    && item.finishedAt
+                    && now - getTimestamp(item.finishedAt) <= downloadQueueTerminalTtlMs)
+            ));
             const nextSnapshot = JSON.stringify(items);
             if (nextSnapshot === queueSnapshot) return;
 
@@ -2330,7 +2331,7 @@
                 .map(item => {
                     const galleryId = String(item.galleryId);
                     return {
-                        id: String(item.id || `gallery-${galleryId}`),
+                        id: `gallery-${galleryId}`,
                         galleryId,
                         url: String(item.url || ''),
                         title: String(item.title || ''),
@@ -2484,12 +2485,242 @@
         return normalizeUnifiedDownloads({ version: 1, items });
     }
 
-    async function loadDownloadQueue() {
-        return normalizeDownloadQueue(await GM.getValue(downloadQueueKey, { version: 1, items: [] }));
+    async function loadUnifiedStoreOnly() {
+        return normalizeUnifiedDownloads(await GM.getValue(unifiedDownloadsKey, { version: 1, items: [] }));
     }
 
-    async function saveDownloadQueue(queue) {
-        await GM.setValue(downloadQueueKey, normalizeDownloadQueue(queue));
+    async function saveUnifiedDownloads(store) {
+        await GM.setValue(unifiedDownloadsKey, normalizeUnifiedDownloads(store));
+    }
+
+    function prepareUnifiedDownloadsForWrite(store) {
+        const now = Date.now();
+        const nowIso = new Date(now).toISOString();
+
+        // Unified terminal records are durable. Only abandoned running work is
+        // recovered here; the 60-second terminal TTL is a display concern.
+        store.items = store.items.map(item => {
+            if (
+                item.status === 'running'
+                && item.workerId !== downloadQueueWorkerId
+                && (!item.heartbeatAt || now - Date.parse(item.heartbeatAt) > downloadQueueStaleRunningMs)
+            ) {
+                return {
+                    ...item,
+                    status: 'pending',
+                    updatedAt: nowIso,
+                    startedAt: null,
+                    heartbeatAt: null,
+                    workerId: null,
+                    error: ''
+                };
+            }
+            return item;
+        });
+
+        return store;
+    }
+
+    async function withUnifiedDownloadsLock(task) {
+        if (navigator.locks?.request) {
+            return navigator.locks.request(unifiedDownloadsLockName, async () => task());
+        }
+
+        // Keep unified-store writes ordered in this tab when Web Locks are unavailable.
+        const next = unifiedDownloadsWriteQueue.then(task, task);
+        unifiedDownloadsWriteQueue = next.catch(() => {});
+        return next;
+    }
+
+    async function updateUnifiedDownloads(mutator) {
+        return withUnifiedDownloadsLock(async () => {
+            const store = await loadUnifiedStoreOnly();
+            const before = JSON.stringify(store);
+
+            prepareUnifiedDownloadsForWrite(store);
+            const result = await mutator(store);
+
+            if (JSON.stringify(store) !== before) {
+                await saveUnifiedDownloads(store);
+            }
+            return result;
+        });
+    }
+
+    function markUnifiedDownload(galleryId, changes) {
+        const normalizedGalleryId = String(galleryId);
+        return updateUnifiedDownloads(store => {
+            const item = store.items.find(candidate => candidate.galleryId === normalizedGalleryId);
+            if (!item) return null;
+
+            const nextChanges = typeof changes === 'function' ? changes(item) : changes;
+            if (!nextChanges) return item;
+
+            Object.assign(item, nextChanges, { updatedAt: new Date().toISOString() });
+            return item;
+        });
+    }
+
+    function dequeueUnifiedDownload(galleryId, existingStore = null) {
+        const normalizedGalleryId = String(galleryId);
+        const mutator = store => {
+            const item = store.items.find(candidate => candidate.galleryId === normalizedGalleryId);
+            if (!item) return null;
+
+            if (item.downloadedAt) {
+                const now = new Date().toISOString();
+                Object.assign(item, {
+                    status: 'done',
+                    updatedAt: now,
+                    startedAt: null,
+                    finishedAt: item.downloadedAt,
+                    heartbeatAt: null,
+                    workerId: null,
+                    error: ''
+                });
+            } else {
+                store.items = store.items.filter(candidate => candidate !== item);
+            }
+            return item;
+        };
+
+        return existingStore ? mutator(existingStore) : updateUnifiedDownloads(mutator);
+    }
+
+    function enqueueUnifiedDownload(target) {
+        const galleryId = String(target.galleryId);
+        return updateUnifiedDownloads(store => {
+            let item = store.items.find(candidate => candidate.galleryId === galleryId);
+
+            if (!item) {
+                const now = new Date().toISOString();
+                item = {
+                    id: `gallery-${galleryId}`,
+                    galleryId,
+                    url: String(target.url || ''),
+                    title: String(target.title || ''),
+                    group: '',
+                    author: '',
+                    source: String(target.source || ''),
+                    status: 'pending',
+                    createdAt: now,
+                    updatedAt: now,
+                    startedAt: null,
+                    finishedAt: null,
+                    downloadedAt: '',
+                    heartbeatAt: null,
+                    workerId: null,
+                    error: '',
+                    metadataHydrated: false
+                };
+                store.items.push(item);
+                return { action: 'queued', item };
+            }
+
+            if (isTerminalDownloadQueueStatus(item.status)) {
+                const now = new Date().toISOString();
+                Object.assign(item, {
+                    status: 'pending',
+                    updatedAt: now,
+                    startedAt: null,
+                    finishedAt: null,
+                    heartbeatAt: null,
+                    workerId: null,
+                    error: ''
+                });
+                if (target.title) item.title = String(target.title);
+                if (target.url) item.url = String(target.url);
+                return { action: 'queued', item };
+            }
+
+            if (item.status === 'pending') {
+                const removedItem = { ...item };
+                dequeueUnifiedDownload(galleryId, store);
+                return { action: 'removed', item: removedItem };
+            }
+
+            return { action: 'already-running', item };
+        });
+    }
+
+    async function claimNextUnifiedDownload() {
+        const legacyQueue = await loadDownloadQueue();
+        const migrationQueue = prepareDownloadQueueForWrite({
+            ...legacyQueue,
+            items: legacyQueue.items.map(item => ({ ...item }))
+        });
+
+        return updateUnifiedDownloads(store => {
+            const now = new Date().toISOString();
+            // The legacy queue remains read-only and is imported lazily so users
+            // do not lose pending work when upgrading from the split stores.
+            migrationQueue.items
+                .filter(item => item.status === 'pending' || item.status === 'running')
+                .forEach(legacyItem => {
+                    const galleryId = String(legacyItem.galleryId);
+                    let item = store.items.find(candidate => candidate.galleryId === galleryId);
+                    if (item && getTimestamp(item.updatedAt) >= getTimestamp(legacyItem.updatedAt)) return;
+
+                    if (!item) {
+                        item = {
+                            id: `gallery-${galleryId}`,
+                            galleryId,
+                            url: '',
+                            title: '',
+                            group: '',
+                            author: '',
+                            source: '',
+                            status: 'pending',
+                            createdAt: '',
+                            updatedAt: '',
+                            startedAt: null,
+                            finishedAt: null,
+                            downloadedAt: '',
+                            heartbeatAt: null,
+                            workerId: null,
+                            error: '',
+                            metadataHydrated: false
+                        };
+                        store.items.push(item);
+                    }
+
+                    Object.assign(item, {
+                        url: legacyItem.url,
+                        title: legacyItem.title,
+                        source: legacyItem.source,
+                        status: legacyItem.status,
+                        createdAt: legacyItem.createdAt || now,
+                        updatedAt: legacyItem.updatedAt || now,
+                        startedAt: legacyItem.startedAt,
+                        finishedAt: legacyItem.finishedAt,
+                        heartbeatAt: legacyItem.heartbeatAt,
+                        workerId: legacyItem.workerId,
+                        error: legacyItem.error
+                    });
+                });
+
+            const runningCount = store.items.filter(item => item.status === 'running').length;
+            if (runningCount >= maxGlobalDownloadCount) return null;
+
+            const item = store.items
+                .filter(candidate => candidate.status === 'pending')
+                .sort((a, b) => getTimestamp(a.createdAt) - getTimestamp(b.createdAt))[0];
+            if (!item) return null;
+
+            Object.assign(item, {
+                status: 'running',
+                updatedAt: now,
+                startedAt: now,
+                heartbeatAt: now,
+                workerId: downloadQueueWorkerId,
+                error: ''
+            });
+            return { ...item };
+        });
+    }
+
+    async function loadDownloadQueue() {
+        return normalizeDownloadQueue(await GM.getValue(downloadQueueKey, { version: 1, items: [] }));
     }
 
     function isTerminalDownloadQueueStatus(status) {
@@ -2524,51 +2755,6 @@
         return queue;
     }
 
-    async function withDownloadQueueLock(task) {
-        if (navigator.locks?.request) {
-            return navigator.locks.request(downloadQueueLockName, async () => task());
-        }
-
-        // Web Locks provide cross-tab serialization. This fallback keeps writes in
-        // this tab ordered when the API is unavailable.
-        const next = downloadQueueWriteQueue.then(task, task);
-        downloadQueueWriteQueue = next.catch(() => {});
-        return next;
-    }
-
-    async function updateDownloadQueue(mutator) {
-        return withDownloadQueueLock(async () => {
-            const queue = await loadDownloadQueue();
-            const before = JSON.stringify(queue);
-
-            prepareDownloadQueueForWrite(queue);
-            const result = await mutator(queue);
-
-            if (JSON.stringify(queue) !== before) {
-                await saveDownloadQueue(queue);
-            }
-            return result;
-        });
-    }
-
-    function removeQueuedDownload(queueItemId) {
-        return updateDownloadQueue(queue => {
-            queue.items = queue.items.filter(item => !(item.id === queueItemId && item.status === 'pending'));
-        });
-    }
-
-    async function markQueuedDownload(queueItemId, changes) {
-        return updateDownloadQueue(queue => {
-            const item = queue.items.find(candidate => candidate.id === queueItemId);
-            if (!item) return null;
-
-            const nextChanges = typeof changes === 'function' ? changes(item) : changes;
-            if (!nextChanges) return item;
-
-            Object.assign(item, nextChanges, { updatedAt: new Date().toISOString() });
-            return item;
-        });
-    }
 
     function getBookQueueTarget(book) {
         const link = getBookLinkFromElement(book);
@@ -2595,44 +2781,6 @@
         };
     }
 
-    function createDownloadQueueItem(target) {
-        const now = new Date().toISOString();
-
-        return {
-            id: `gallery-${target.galleryId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-            galleryId: String(target.galleryId),
-            url: target.url,
-            title: target.title || '',
-            source: target.source,
-            status: 'pending',
-            createdAt: now,
-            updatedAt: now,
-            startedAt: null,
-            finishedAt: null,
-            heartbeatAt: null,
-            workerId: null,
-            error: ''
-        };
-    }
-
-    async function enqueueDownload(target) {
-        return updateDownloadQueue(queue => {
-            const existing = queue.items.find(item => item.galleryId === String(target.galleryId) && item.status === 'pending');
-            if (existing) {
-                queue.items = queue.items.filter(item => item !== existing);
-                return { action: 'removed', item: existing };
-            }
-
-            const running = queue.items.find(item => item.galleryId === String(target.galleryId) && item.status === 'running');
-            if (running) {
-                return { action: 'already-running', item: running };
-            }
-
-            const item = createDownloadQueueItem(target);
-            queue.items.push(item);
-            return { action: 'queued', item };
-        });
-    }
 
     function markDLButtonDownloaded() {
         const heading = document.querySelector('a#dl-button > h1');
@@ -2970,7 +3118,7 @@
             canceled: false,
             cancelWait: null,
             heartbeatTimer: null,
-            queueItemId: null,
+            queueGalleryId: null,
             previousText,
             xhr: null
         };
@@ -3036,13 +3184,12 @@
     }
 
     function startDownloadQueueHeartbeat(downloadState) {
-        if (!downloadState.queueItemId) return;
+        if (!downloadState.queueGalleryId) return;
 
         downloadState.heartbeatTimer = window.setInterval(() => {
-            markQueuedDownload(downloadState.queueItemId, {
-                heartbeatAt: new Date().toISOString(),
-                workerId: downloadQueueWorkerId
-            }).catch(() => {});
+            markUnifiedDownload(downloadState.queueGalleryId, item => item.status === 'running'
+                ? { heartbeatAt: new Date().toISOString() }
+                : null).catch(() => {});
         }, downloadQueueHeartbeatInterval);
     }
 
@@ -3078,10 +3225,9 @@
 
             zip.file(imageName, await retryDownloadBlob(url, downloadState), { binary: true });
             onProgress(`${i + 1} / ${galleryInfo.files.length}`, (i + 1) / galleryInfo.files.length * 100);
-            await markQueuedDownload(queueItem.id, {
-                heartbeatAt: new Date().toISOString(),
-                workerId: downloadQueueWorkerId
-            });
+            await markUnifiedDownload(queueItem.galleryId, item => item.status === 'running'
+                ? { heartbeatAt: new Date().toISOString() }
+                : null);
             await wait(1000, downloadState);
         }
 
@@ -3101,7 +3247,7 @@
         const downloadProgress = visibleBook ? createBookDownloadProgress(visibleBook) : null;
         const downloadState = isCurrentBookPage ? createBookPageDownloadState('DOWNLOAD') : createListDownloadState(downloadProgress);
 
-        downloadState.queueItemId = queueItem.id;
+        downloadState.queueGalleryId = String(queueItem.galleryId);
         activeQueuedDownloads.set(String(queueItem.galleryId), downloadState);
         if (isCurrentBookPage) {
             activeBookPageDownload = downloadState;
@@ -3143,7 +3289,7 @@
             } else {
                 showListDownloadNotice('Downloaded');
             }
-            await markQueuedDownload(queueItem.id, {
+            await markUnifiedDownload(queueItem.galleryId, {
                 status: 'done',
                 finishedAt: new Date().toISOString(),
                 heartbeatAt: null,
@@ -3167,7 +3313,7 @@
             } else {
                 showListDownloadNotice(canceled ? 'Canceled' : failureText);
             }
-            await markQueuedDownload(queueItem.id, {
+            await markUnifiedDownload(queueItem.galleryId, {
                 status: canceled ? 'canceled' : 'error',
                 finishedAt: new Date().toISOString(),
                 heartbeatAt: null,
@@ -3189,34 +3335,13 @@
         }
     }
 
-    async function claimNextQueuedDownload() {
-        return updateDownloadQueue(queue => {
-            const runningCount = queue.items.filter(item => item.status === 'running').length;
-            if (runningCount >= maxGlobalDownloadCount) return null;
-
-            const item = queue.items.find(candidate => candidate.status === 'pending');
-            if (!item) return null;
-
-            const now = new Date().toISOString();
-            Object.assign(item, {
-                status: 'running',
-                updatedAt: now,
-                startedAt: now,
-                heartbeatAt: now,
-                workerId: downloadQueueWorkerId,
-                error: ''
-            });
-            return { ...item };
-        });
-    }
-
     async function processDownloadQueue() {
         if (downloadQueueWorkerRunning) return;
 
         downloadQueueWorkerRunning = true;
         try {
             while (activeQueuedDownloads.size < maxGlobalDownloadCount) {
-                const item = await claimNextQueuedDownload();
+                const item = await claimNextUnifiedDownload();
                 if (!item) break;
 
                 runQueuedDownload(item).catch(() => {});
@@ -3251,7 +3376,7 @@
             return 'canceled';
         }
 
-        const result = await enqueueDownload(target);
+        const result = await enqueueUnifiedDownload(target);
         scheduleDownloadQueueWorker();
         return result.action;
     }
@@ -3415,7 +3540,7 @@
     }
 
     async function syncVisibleQueuedBookBadges() {
-        const pendingIds = new Set((await loadDownloadQueue()).items
+        const pendingIds = new Set((await loadUnifiedStoreOnly()).items
             .filter(item => item.status === 'pending')
             .map(item => String(item.galleryId)));
 
@@ -3677,7 +3802,7 @@
             canceled: false,
             cancelWait: null,
             heartbeatTimer: null,
-            queueItemId: null,
+            queueGalleryId: null,
             progress: downloadProgress,
             xhr: null
         };
