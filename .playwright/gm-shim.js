@@ -1,5 +1,5 @@
-// Minimal GM.* shim for running hitomi-tweak.user.js / hitomi-download-history.user.js
-// under plain Playwright (no real userscript manager extension installed).
+// Minimal GM.* shim for running hitomi-tweak.user.js under plain Playwright
+// (no real userscript manager extension installed).
 //
 // GM.getValue/GM.setValue are namespaced under a separate localStorage prefix so this
 // shim mirrors the real Tampermonkey/Violentmonkey behavior: GM storage is private per

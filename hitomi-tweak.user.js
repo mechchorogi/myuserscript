@@ -127,6 +127,46 @@
         return location.pathname === nameMapPagePath;
     }
 
+    function installDownloadNavLinkStyle() {
+        const styleId = 'hitomi-tweak-download-nav-link-style';
+        if (document.getElementById(styleId)) return;
+
+        // The navbar is a fixed max-width row that already fits logo + nav + search
+        // box tightly. Shrinking only our added item does not free enough width to
+        // stop the search box from being pushed out of place, so shrink the whole
+        // nav (native items included) instead. `.navbar nav` and
+        // `.navbar nav > ul > li > a` both out-specificity the site's own
+        // `nav` / `nav > ul > li > a` rules, so no !important is needed.
+        const style = document.createElement('style');
+        style.id = styleId;
+        style.textContent = `
+            .navbar nav {
+                font-size: 14px;
+            }
+            .navbar nav > ul > li > a {
+                padding: 10px 10px;
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+    function installDownloadNavLink() {
+        // The LANGUAGE dropdown is managed differently across page types, so it
+        // cannot be reused reliably. Add an independent download navigation item.
+        const navList = document.querySelector('.navbar nav ul');
+        if (!navList || navList.querySelector('.hitomi-tweak-download-nav-link')) return;
+
+        installDownloadNavLinkStyle();
+
+        const li = document.createElement('li');
+        const link = document.createElement('a');
+        link.className = 'hitomi-tweak-download-nav-link';
+        link.href = new URL(downloadPagePath, location.origin).href;
+        link.textContent = 'DOWNLOADS';
+        li.appendChild(link);
+        navList.appendChild(li);
+    }
+
     function blacklistStorageKey(key) {
         return `hitomi-tweak-blacklist-${key}`;
     }
@@ -4136,6 +4176,7 @@
 
         installStyles();
         document.addEventListener('keydown', handleGlobalKeydown);
+        installDownloadNavLink();
 
         if (isReaderPage()) {
             installReaderProgress();

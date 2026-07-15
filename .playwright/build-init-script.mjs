@@ -15,7 +15,7 @@ const repoRoot = path.resolve(here, '..');
 
 const gmShimSource = readFileSync(path.join(here, 'gm-shim.js'), 'utf8');
 
-const userscripts = ['hitomi-tweak.user.js', 'hitomi-download-history.user.js'];
+const userscripts = ['hitomi-tweak.user.js'];
 
 function deferUntilDomReady(source, label) {
     return `
