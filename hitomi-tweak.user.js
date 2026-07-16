@@ -1703,10 +1703,10 @@
             });
         }
 
-        function metadataFromGalleryInfo(galleryInfo, fallbackTitle) {
+        function metadataFromGalleryInfo(galleryInfo, existingTitle) {
             const title = normalizeMetadataText(galleryInfo?.japanese_title)
                 || normalizeMetadataText(galleryInfo?.title)
-                || fallbackTitle;
+                || existingTitle;
             const group = getGalleryInfoNames(galleryInfo?.groups, 'group').join(', ');
             const author = dedupeNames(getGalleryInfoNames(galleryInfo?.artists, 'artist')).join(', ');
 
@@ -2137,10 +2137,6 @@
             setStatus(`${rows.length} books`);
         });
         installDownloadsRefresh();
-    }
-
-    function getBookTitle() {
-        return document.querySelector('h1.lillie')?.textContent.trim() || document.title;
     }
 
     function getDLButton() {
@@ -2706,7 +2702,7 @@
         return {
             galleryId,
             url: location.href,
-            title: getBookTitle(),
+            title: getBookPageTitle(document, getVerifiedPageGalleryInfo(galleryId), galleryId),
             source: 'book'
         };
     }
@@ -2806,6 +2802,12 @@
         return location.pathname.replace(/\.[^/.]+$/, '').match(/(\d+)$/)?.[1] || null;
     }
 
+    function getVerifiedPageGalleryInfo(galleryId) {
+        return unsafeWindow.galleryinfo?.id && String(unsafeWindow.galleryinfo.id) === String(galleryId)
+            ? unsafeWindow.galleryinfo
+            : null;
+    }
+
     function normalizeMetadataText(text) {
         return text?.replace(/\s+/g, ' ').trim() || '';
     }
@@ -2829,18 +2831,19 @@
     }
 
     function getBookPageTitle(root, galleryInfo, galleryId) {
-        // Book pages hydrate title/author/group/series from galleryinfo after the initial HTML loads.
-        // Keep DOM reads first for live book pages, but fall back to galleryinfo so list-page downloads
-        // can use the same naming path without fetching and executing the book page.
-        return normalizeMetadataText(root.querySelector('h1#gallery-brand > a')?.textContent)
-            || galleryInfo?.japanese_title
-            || galleryInfo?.title
+        // Prefer ID-verified galleryinfo so stale SPA DOM or neighboring list cards cannot leak metadata.
+        // The DOM remains a fallback for pages where galleryinfo is not available yet.
+        return normalizeMetadataText(galleryInfo?.japanese_title)
+            || normalizeMetadataText(galleryInfo?.title)
+            || normalizeMetadataText(root.querySelector('h1#gallery-brand > a')?.textContent)
             || `hitomi-${galleryId}`;
     }
 
     function getBookPageGroup(root, galleryInfo) {
-        // The list page cannot see the rendered Group field. galleryinfo.groups is the source
-        // used by Hitomi's own page hydration, so it is the canonical fallback for naming.
+        // Prefer ID-verified galleryinfo; inspect the DOM only when the canonical metadata is missing.
+        const infoGroups = getGalleryInfoNames(galleryInfo?.groups, 'group');
+        if (infoGroups.length) return infoGroups.map(group => resolveJapaneseName(group, 'group')).join(', ');
+
         const tableRows = Array.from(root.querySelectorAll('table tr'));
         for (const row of tableRows) {
             const cells = Array.from(row.children);
@@ -2857,14 +2860,13 @@
             if (!isMissingMetadataValue(group)) return resolveJapaneseName(group, 'group');
         }
 
-        return getGalleryInfoNames(galleryInfo?.groups, 'group')
-            .map(group => resolveJapaneseName(group, 'group'))
-            .join(', ');
+        return '';
     }
 
     function getBookPageAuthors(root, galleryInfo) {
+        const infoAuthors = getGalleryInfoNames(galleryInfo?.artists, 'artist');
         const authorText = getMetadataListText(root, 'h2#artists');
-        const authorNames = isMissingMetadataValue(authorText) ? getGalleryInfoNames(galleryInfo?.artists, 'artist') : authorText.split(',');
+        const authorNames = infoAuthors.length ? infoAuthors : (isMissingMetadataValue(authorText) ? [] : authorText.split(','));
 
         const names = authorNames
             .map(name => normalizeMetadataText(name))
@@ -2874,6 +2876,10 @@
     }
 
     function getBookPageSeries(root, galleryInfo) {
+        // Prefer ID-verified galleryinfo; inspect the DOM only when the canonical metadata is missing.
+        const infoSeries = getGalleryInfoNames(galleryInfo?.parodys, 'parody');
+        if (infoSeries.length) return infoSeries.map(series => resolveJapaneseName(series, 'series')).join(', ');
+
         const tableRows = Array.from(root.querySelectorAll('table tr'));
         for (const row of tableRows) {
             const cells = Array.from(row.children);
@@ -2890,9 +2896,7 @@
             if (!isMissingMetadataValue(series)) return resolveJapaneseName(series, 'series');
         }
 
-        return getGalleryInfoNames(galleryInfo?.parodys, 'parody')
-            .map(series => resolveJapaneseName(series, 'series'))
-            .join(', ');
+        return '';
     }
 
     function formatDownloadFileNameFromMetadata({ group, authors, title, series }) {
@@ -2928,6 +2932,7 @@
     function getDownloadFileNameFromBookPageDocument(root, galleryInfo, galleryId) {
         // Both book-page and list-page downloads call this. On list pages, root is just the
         // current document, so the galleryinfo fallback is what supplies the metadata.
+        // Without verified galleryinfo, the filename may still use transient DOM metadata and cannot be corrected later.
         return formatDownloadFileNameFromMetadata({
             group: getBookPageGroup(root, galleryInfo),
             authors: getBookPageAuthors(root, galleryInfo),
@@ -2936,13 +2941,13 @@
         });
     }
 
-    function getDownloadHistoryMetadata(root, galleryInfo, galleryId, fallbackTitle) {
+    function getDownloadHistoryMetadata(root, galleryInfo, galleryId) {
         // Store normalized metadata in the unified download record so every download
         // path and the integrated page share the same enrichment state.
         const authors = getBookPageAuthors(root, galleryInfo);
 
         return {
-            title: getBookPageTitle(root, galleryInfo, galleryId) || fallbackTitle,
+            title: getBookPageTitle(root, galleryInfo, galleryId),
             group: getBookPageGroup(root, galleryInfo),
             author: authors.join(', '),
             metadataHydrated: Boolean(galleryInfo)
@@ -2984,7 +2989,7 @@
     }
 
     function markCurrentBookDownloaded(galleryInfo = null, galleryId = getCurrentGalleryId()) {
-        const metadata = getDownloadHistoryMetadata(document, galleryInfo, galleryId, getBookTitle());
+        const metadata = getDownloadHistoryMetadata(document, galleryInfo, galleryId);
         recordUnifiedDownloadDone({
             galleryId: String(galleryId),
             url: location.href,
@@ -3004,7 +3009,7 @@
         // List-page downloads should immediately affect the visible card so users do
         // not need a reload to see the downloaded marker and compact folded state.
         const link = getBookLinkFromElement(book);
-        const metadata = getDownloadHistoryMetadata(document, galleryInfo, galleryInfo.id, book.querySelector('h1.lillie')?.textContent.trim() || document.title);
+        const metadata = getDownloadHistoryMetadata(document, galleryInfo, galleryInfo.id);
         recordUnifiedDownloadDone({
             galleryId: String(galleryInfo.id),
             url: link ? new URL(link.getAttribute('href'), location.href).href : '',
@@ -3071,7 +3076,7 @@
     function markQueuedDownloadCompleted(queueItem, galleryInfo, visibleBook) {
         const isCurrentBook = String(getCurrentGalleryId()) === String(queueItem.galleryId);
         const metadataRoot = isCurrentBook ? document : document.createElement('div');
-        const metadata = getDownloadHistoryMetadata(metadataRoot, galleryInfo, queueItem.galleryId, queueItem.title || document.title);
+        const metadata = getDownloadHistoryMetadata(metadataRoot, galleryInfo, queueItem.galleryId);
         const write = recordUnifiedDownloadDone({
             galleryId: String(queueItem.galleryId),
             url: queueItem.url || location.href,
@@ -3579,9 +3584,8 @@
     async function loadCurrentBookPageGalleryInfo(galleryId, downloadState) {
         for (let i = 0; i < 50; i++) {
             throwIfDownloadCanceled(downloadState);
-            if (unsafeWindow.galleryinfo?.id && String(unsafeWindow.galleryinfo.id) === String(galleryId)) {
-                return unsafeWindow.galleryinfo;
-            }
+            const galleryInfo = getVerifiedPageGalleryInfo(galleryId);
+            if (galleryInfo) return galleryInfo;
             await wait(100, downloadState);
         }
 
@@ -3763,9 +3767,7 @@
             // galleryInfo — otherwise every click-triggered download is recorded
             // without metadata and the history page has to re-fetch it later.
             const galleryId = getCurrentGalleryId();
-            const galleryInfo = unsafeWindow.galleryinfo?.id && String(unsafeWindow.galleryinfo.id) === String(galleryId)
-                ? unsafeWindow.galleryinfo
-                : null;
+            const galleryInfo = getVerifiedPageGalleryInfo(galleryId);
 
             markCurrentBookDownloaded(galleryInfo, galleryId);
         }, true);
