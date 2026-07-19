@@ -58,7 +58,9 @@
     const downloadQueueWorkerInterval = 2500;
     const downloadPageQueueRefreshInterval = 2500;
     const downloadQueueHeartbeatInterval = 5000;
-    const downloadQueueStaleRunningMs = 180000;
+    // Hidden-tab timer throttling can stretch the 5s timer and per-image heartbeats to roughly 60s.
+    // Never lower this below 90s: a live background download could be reset and claimed twice in parallel.
+    const downloadQueueStaleRunningMs = 90000;
     const downloadQueueTerminalTtlMs = 60000;
     const downloadProgressStackClassName = 'hitomi-tweak-download-progress-stack';
     const downloadProgressClassName = 'hitomi-tweak-download-progress';
@@ -66,6 +68,7 @@
     const bookDownloadDoneClassName = 'hitomi-tweak-book-download-done';
     const bookDownloadCanceledClassName = 'hitomi-tweak-book-download-canceled';
     const bookDownloadErrorClassName = 'hitomi-tweak-book-download-error';
+    const bookDownloadRemoteClassName = 'hitomi-tweak-download-remote';
     const bookDownloadProgressLabelClassName = 'hitomi-tweak-book-download-progress-label';
     const bookPageProgressLabelClassName = 'hitomi-tweak-book-page-progress-label';
     const downloadedBookHeadingClassName = 'hitomi-tweak-downloaded-book-heading';
@@ -543,6 +546,11 @@
                 text-overflow: ellipsis;
                 white-space: nowrap;
                 pointer-events: none;
+            }
+
+            div.gallery-content > div.${bookDownloadRemoteClassName} > .${bookDownloadProgressLabelClassName} {
+                font-style: italic;
+                opacity: 0.85;
             }
 
             #progressbar {
@@ -3318,7 +3326,7 @@
         const visibleBook = getVisibleBookForGalleryId(target.galleryId);
         if (visibleBook) {
             if (action === 'queued') {
-                showQueuedBookBadge(visibleBook);
+                showBookQueueBadge(visibleBook, 'Queued');
                 return;
             }
 
@@ -3402,7 +3410,7 @@
         label.className = bookDownloadProgressLabelClassName;
         book.querySelectorAll(`:scope > .${bookDownloadProgressLabelClassName}`).forEach(elem => elem.remove());
         queuedBookProgress.delete(book);
-        book.classList.remove(bookDownloadDoneClassName, bookDownloadCanceledClassName, bookDownloadErrorClassName);
+        book.classList.remove(bookDownloadDoneClassName, bookDownloadCanceledClassName, bookDownloadErrorClassName, bookDownloadRemoteClassName);
         book.classList.add(bookDownloadProgressClassName);
         book.style.setProperty('--hitomi-tweak-download-percent', '0%');
         book.appendChild(label);
@@ -3432,43 +3440,62 @@
             bookDownloadProgressClassName,
             bookDownloadDoneClassName,
             bookDownloadCanceledClassName,
-            bookDownloadErrorClassName
+            bookDownloadErrorClassName,
+            bookDownloadRemoteClassName
         );
         downloadProgress.book.style.removeProperty('--hitomi-tweak-download-percent');
     }
 
-    function showQueuedBookBadge(book) {
+    function showBookQueueBadge(book, text) {
         if (!book?.isConnected) return null;
 
         const existing = queuedBookProgress.get(book);
         if (existing?.label.isConnected) {
-            updateBookDownloadProgress(existing, 'Queued', 0);
+            updateBookDownloadProgress(existing, text, 0);
             return existing;
         }
 
         const progress = createBookDownloadProgress(book);
-        updateBookDownloadProgress(progress, 'Queued', 0);
+        updateBookDownloadProgress(progress, text, 0);
         queuedBookProgress.set(book, progress);
         return progress;
     }
 
     async function syncVisibleQueuedBookBadges() {
-        const pendingIds = new Set((await loadUnifiedStoreOnly()).items
-            .filter(item => item.status === 'pending')
-            .map(item => String(item.galleryId)));
+        const items = (await loadUnifiedStoreOnly()).items;
+        const pendingIds = new Set();
+        const remoteRunningIds = new Set();
+        const doneIds = new Set();
+        items.forEach(item => {
+            const galleryId = String(item.galleryId);
+            if (item.status === 'pending') pendingIds.add(galleryId);
+            if (item.status === 'running' && !activeQueuedDownloads.has(galleryId)) remoteRunningIds.add(galleryId);
+            if (item.status === 'done' || item.downloadedAt) doneIds.add(galleryId);
+        });
+        const keepIds = new Set([...pendingIds, ...remoteRunningIds]);
 
         for (const [book, progress] of Array.from(queuedBookProgress.entries())) {
             const galleryId = getBookIdFromElement(book);
-            if (!book.isConnected || !galleryId || !pendingIds.has(galleryId)) {
+            if (!book.isConnected || !galleryId || !keepIds.has(galleryId)) {
                 hideBookDownloadProgress(progress);
                 queuedBookProgress.delete(book);
+                // Apply the remote completion transition only when its badge disappears. Deleting
+                // the entry makes this one-shot, so a later manual unfold is not undone by polling.
+                if (book.isConnected && galleryId && doneIds.has(galleryId)) {
+                    setBookDownloadedIndicator(book, true);
+                    getFilterBook(book).fold();
+                }
             }
         }
 
         getBooks().forEach(book => {
             const galleryId = getBookIdFromElement(book);
             if (galleryId && pendingIds.has(galleryId) && !activeQueuedDownloads.has(galleryId)) {
-                showQueuedBookBadge(book);
+                showBookQueueBadge(book, 'Queued');
+                book.classList.remove(bookDownloadRemoteClassName);
+            } else if (galleryId && remoteRunningIds.has(galleryId)) {
+                showBookQueueBadge(book, 'Downloading');
+                book.classList.add(bookDownloadRemoteClassName);
             }
         });
     }
