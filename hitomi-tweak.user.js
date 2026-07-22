@@ -20,7 +20,7 @@
 // - Filter gallery books with a GM-stored blacklist.
 // - Import and export blacklist JSON backups.
 // - Fold gallery books and persist the folded state.
-// - Download and track books from book and list pages, with up to four list downloads at once.
+// - Download books immediately and keep a unified history, with up to four list downloads at once.
 // - Show page progress in the reader.
 // - Add keyboard shortcuts for help, filtering, downloads, navigation, reading, folding, and page closing.
 
@@ -37,7 +37,6 @@
 
     const blacklistKeys = ['author', 'language', 'series', 'tag', 'title', 'type'];
     const downloadHistoryKey = 'hitomi-tweak-download-history';
-    const downloadQueueKey = 'hitomi-tweak-download-queue';
     const unifiedDownloadsKey = 'hitomi-tweak-downloads';
     const unifiedDownloadsLockName = 'hitomi-tweak-downloads-lock';
     const foldedBookIdsKey = 'hitomi-tweak-folded-book-ids';
@@ -54,21 +53,14 @@
         ['korean', 'Korean'],
         ['all', 'All']
     ];
-    const maxGlobalDownloadCount = 4;
-    const downloadQueueWorkerInterval = 2500;
+    const maxListDownloadCount = 4;
     const downloadPageQueueRefreshInterval = 2500;
-    const downloadQueueHeartbeatInterval = 5000;
-    // Hidden-tab timer throttling can stretch the 5s timer and per-image heartbeats to roughly 60s.
-    // Never lower this below 90s: a live background download could be reset and claimed twice in parallel.
-    const downloadQueueStaleRunningMs = 90000;
-    const downloadQueueTerminalTtlMs = 60000;
     const downloadProgressStackClassName = 'hitomi-tweak-download-progress-stack';
     const downloadProgressClassName = 'hitomi-tweak-download-progress';
     const bookDownloadProgressClassName = 'hitomi-tweak-book-download-progress';
     const bookDownloadDoneClassName = 'hitomi-tweak-book-download-done';
     const bookDownloadCanceledClassName = 'hitomi-tweak-book-download-canceled';
     const bookDownloadErrorClassName = 'hitomi-tweak-book-download-error';
-    const bookDownloadRemoteClassName = 'hitomi-tweak-download-remote';
     const bookDownloadProgressLabelClassName = 'hitomi-tweak-book-download-progress-label';
     const bookPageProgressLabelClassName = 'hitomi-tweak-book-page-progress-label';
     const downloadedBookHeadingClassName = 'hitomi-tweak-downloaded-book-heading';
@@ -85,7 +77,7 @@
         ['/', 'Toggle this help'],
         ['a', 'Open author link'],
         ['b', 'Toggle blocklist mode'],
-        ['d', 'Queue, remove, or cancel current book download'],
+        ['d', 'Download current book (up to 4 on list pages)'],
         ['j', 'Focus next book'],
         ['k', 'Focus previous book'],
         ['t', 'Fold focused book'],
@@ -101,17 +93,12 @@
     let helpOverlay = null;
     let activeBookPageDownload = null;
     let activeListDownloads = new Map();
-    let activeQueuedDownloads = new Map();
     let galleryInfoLoadQueue = Promise.resolve();
     let listDownloadNotice = null;
     let listDownloadProgressStack = null;
     let nameMap = { version: 1, group: {}, author: {}, series: {} };
-    let queuedBookProgress = new Map();
     let titleBeforeListDownloads = null;
     let unifiedDownloadsWriteQueue = Promise.resolve();
-    let downloadQueueWorkerTimer = null;
-    let downloadQueueWorkerRunning = false;
-    const downloadQueueWorkerId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
     function isReaderPage() {
         return location.pathname.startsWith('/reader/');
@@ -546,11 +533,6 @@
                 text-overflow: ellipsis;
                 white-space: nowrap;
                 pointer-events: none;
-            }
-
-            div.gallery-content > div.${bookDownloadRemoteClassName} > .${bookDownloadProgressLabelClassName} {
-                font-style: italic;
-                opacity: 0.85;
             }
 
             #progressbar {
@@ -1627,12 +1609,11 @@
             { key: 'title', label: 'title' },
             { key: 'group', label: 'group' },
             { key: 'author', label: 'author' },
-            { key: 'status', label: 'status' },
             { key: 'updatedAt', label: 'updated at' }
         ];
         let rows = [];
         let selectedIndex = -1;
-        let sortState = { key: 'status', direction: 'asc' };
+        let sortState = { key: 'bookId', direction: 'desc' };
         let statusElem = null;
         let tbodyElem = null;
         const headerElems = new Map();
@@ -1657,17 +1638,6 @@
             if (Number.isNaN(date.getTime())) return normalizeMetadataText(value);
 
             return date.toLocaleString();
-        }
-
-        function cancelQueuedDownload(item) {
-            const activeDownload = activeQueuedDownloads.get(String(item.galleryId));
-            if (!activeDownload) return;
-
-            if (activeDownload === activeBookPageDownload) {
-                cancelBookPageDownload(activeDownload);
-            } else {
-                cancelListDownload(activeDownload);
-            }
         }
 
         async function refreshDownloads() {
@@ -1731,10 +1701,7 @@
                     author: item.author,
                     url: item.url,
                     downloadedAt: item.downloadedAt,
-                    status: item.status,
-                    updatedAt: item.updatedAt || item.downloadedAt || item.finishedAt || '',
-                    createdAt: item.createdAt,
-                    finishedAt: item.finishedAt,
+                    updatedAt: item.updatedAt || item.downloadedAt || '',
                     galleryId: item.galleryId,
                     metadataHydrated: item.metadataHydrated
                 }))
@@ -1745,18 +1712,10 @@
             if (key === 'group') return resolveJapaneseNameList(row.group, 'group');
             if (key === 'author') return resolveJapaneseNameList(row.author, 'author');
             if (key === 'updatedAt') return formatDownloadedAt(row.updatedAt);
-            if (key === 'status') return row.status;
             return String(row[key] || '');
         }
 
         function compareValues(a, b, key) {
-            if (key === 'status') {
-                const statusPriority = { running: 0, pending: 1, error: 2, canceled: 3, done: 4 };
-                const statusDifference = statusPriority[a.status] - statusPriority[b.status];
-                if (statusDifference !== 0) return statusDifference;
-                if (a.status === 'pending') return getTimestamp(a.createdAt) - getTimestamp(b.createdAt);
-                return getTimestamp(b.updatedAt) - getTimestamp(a.updatedAt);
-            }
             if (key === 'bookId') {
                 const left = Number(a.bookId);
                 const right = Number(b.bookId);
@@ -1820,7 +1779,6 @@
                 const tr = document.createElement('tr');
                 tr.classList.toggle(selectedRowClassName, index === selectedIndex);
                 tr.dataset.galleryId = String(row.galleryId || row.bookId);
-                tr.dataset.status = row.status;
                 tr.tabIndex = -1;
                 tr.addEventListener('click', () => focusRow(index));
 
@@ -1833,44 +1791,11 @@
                         link.rel = 'noopener noreferrer';
                         link.textContent = row.bookId || row.url;
                         td.appendChild(link);
-                    } else if (column.key === 'status') {
-                        const statusBadge = document.createElement('span');
-                        statusBadge.className = `hitomi-download-page-status-badge hitomi-download-page-status-${row.status}`;
-                        statusBadge.textContent = row.status;
-                        td.appendChild(statusBadge);
                     } else {
                         td.textContent = getDisplayValue(row, column.key);
                     }
                     tr.appendChild(td);
                 });
-
-                const actionTd = document.createElement('td');
-                if (row.status === 'pending') {
-                    const removeButton = document.createElement('button');
-                    removeButton.type = 'button';
-                    removeButton.textContent = 'Remove';
-                    removeButton.addEventListener('click', async () => {
-                        removeButton.disabled = true;
-                        try {
-                            await dequeueUnifiedDownload(row.galleryId);
-                            await refreshDownloads();
-                        } catch (e) {
-                            removeButton.disabled = false;
-                            console.error(e);
-                        }
-                    });
-                    actionTd.appendChild(removeButton);
-                } else if (row.status === 'running' && activeQueuedDownloads.has(String(row.galleryId))) {
-                    const cancelButton = document.createElement('button');
-                    cancelButton.type = 'button';
-                    cancelButton.textContent = 'Cancel';
-                    cancelButton.addEventListener('click', () => {
-                        cancelButton.disabled = true;
-                        cancelQueuedDownload({ galleryId: row.galleryId });
-                    });
-                    actionTd.appendChild(cancelButton);
-                }
-                tr.appendChild(actionTd);
 
                 return tr;
             }));
@@ -1940,18 +1865,6 @@
                     font-size: 14px;
                     text-align: right;
                 }
-                .hitomi-download-page-status-badge {
-                    display: inline-block;
-                    padding: 2px 7px;
-                    border-radius: 999px;
-                    font-size: 12px;
-                    font-weight: 600;
-                }
-                .hitomi-download-page-status-pending { background: #fff3bf; color: #7a5d00; }
-                .hitomi-download-page-status-running { background: #dbeafe; color: #1e40af; }
-                .hitomi-download-page-status-done { background: #dcfce7; color: #166534; }
-                .hitomi-download-page-status-error { background: #fee2e2; color: #991b1b; }
-                .hitomi-download-page-status-canceled { background: #e5e7eb; color: #4b5563; }
                 .hitomi-download-page-table-wrap {
                     overflow: visible;
                     border: 1px solid #d9e2ec;
@@ -1986,9 +1899,7 @@
                 .hitomi-download-page-table th:nth-child(2) { width: 30%; }
                 .hitomi-download-page-table th:nth-child(3) { width: 15%; }
                 .hitomi-download-page-table th:nth-child(4) { width: 15%; }
-                .hitomi-download-page-table th:nth-child(5) { width: 90px; }
-                .hitomi-download-page-table th:nth-child(6) { width: 160px; }
-                .hitomi-download-page-table th:nth-child(7) { width: 90px; }
+                .hitomi-download-page-table th:nth-child(5) { width: 160px; }
                 .hitomi-download-page-table tr.${selectedRowClassName} {
                     background: #dbeafe;
                     outline: 2px solid #2563eb;
@@ -1996,20 +1907,6 @@
                 }
                 .hitomi-download-page-table tr:hover { background: #eff6ff; }
                 .hitomi-download-page-table a { color: #1d4ed8; }
-                .hitomi-download-page-table button {
-                    min-height: 30px;
-                    padding: 4px 10px;
-                    border: 1px solid #bcccdc;
-                    border-radius: 4px;
-                    background: #fff;
-                    color: #243b53;
-                    font: inherit;
-                    cursor: pointer;
-                }
-                .hitomi-download-page-table button:disabled {
-                    cursor: default;
-                    opacity: 0.6;
-                }
                 .${sortIndicatorClassName} {
                     display: inline-block;
                     min-width: 1.2em;
@@ -2063,10 +1960,6 @@
                 headerElems.set(column.key, th);
                 headerRow.appendChild(th);
             });
-            const actionTh = document.createElement('th');
-            actionTh.textContent = 'action';
-            headerRow.appendChild(actionTh);
-
             thead.appendChild(headerRow);
             table.append(thead, tbodyElem);
             tableWrapElem.appendChild(table);
@@ -2172,33 +2065,6 @@
         };
     }
 
-    function normalizeDownloadQueue(input) {
-        if (!input || typeof input !== 'object' || input.version !== 1 || !Array.isArray(input.items)) {
-            return { version: 1, items: [] };
-        }
-
-        return {
-            version: 1,
-            items: input.items
-                .filter(item => item && typeof item === 'object' && item.galleryId)
-                .map(item => ({
-                    id: String(item.id || `gallery-${item.galleryId}-${Date.now().toString(36)}`),
-                    galleryId: String(item.galleryId),
-                    url: String(item.url || ''),
-                    title: String(item.title || ''),
-                    source: item.source === 'list' ? 'list' : 'book',
-                    status: ['pending', 'running', 'done', 'error', 'canceled'].includes(item.status) ? item.status : 'pending',
-                    createdAt: String(item.createdAt || new Date().toISOString()),
-                    updatedAt: String(item.updatedAt || item.createdAt || new Date().toISOString()),
-                    startedAt: item.startedAt || null,
-                    finishedAt: item.finishedAt || null,
-                    heartbeatAt: item.heartbeatAt || null,
-                    workerId: item.workerId || null,
-                    error: String(item.error || '')
-                }))
-        };
-    }
-
     function normalizeUnifiedDownloads(input) {
         if (!input || typeof input !== 'object' || input.version !== 1 || !Array.isArray(input.items)) {
             return { version: 1, items: [] };
@@ -2274,30 +2140,6 @@
         return records;
     }
 
-    function selectQueueRecords(items) {
-        const records = new Map();
-        const statusPriority = { running: 2, pending: 1, done: 0, error: 0, canceled: 0 };
-
-        items.forEach(item => {
-            const galleryId = String(item.galleryId || '');
-            if (!galleryId) return;
-
-            const current = records.get(galleryId);
-            const candidatePriority = statusPriority[item.status];
-            const currentPriority = current ? statusPriority[current.status] : -1;
-            if (
-                !current
-                || candidatePriority > currentPriority
-                || (candidatePriority === 0 && currentPriority === 0
-                    && getTimestamp(item.updatedAt) > getTimestamp(current.updatedAt))
-            ) {
-                records.set(galleryId, item);
-            }
-        });
-
-        return records;
-    }
-
     function selectUnifiedRecords(items) {
         const records = new Map();
 
@@ -2315,49 +2157,36 @@
     }
 
     async function loadUnifiedDownloads() {
-        const [history, queue, unified] = await Promise.all([
+        const [history, unified] = await Promise.all([
             loadDownloadHistory(),
-            loadDownloadQueue().then(value => prepareDownloadQueueForWrite({
-                ...value,
-                items: value.items.map(item => ({ ...item }))
-            })),
             GM.getValue(unifiedDownloadsKey, { version: 1, items: [] }).then(normalizeUnifiedDownloads)
         ]);
         const historyRecords = selectHistoryRecords(history);
-        const queueRecords = selectQueueRecords(queue.items);
         const unifiedRecords = selectUnifiedRecords(unified.items);
         const galleryIds = new Set([
             ...historyRecords.keys(),
-            ...queueRecords.keys(),
             ...unifiedRecords.keys()
         ]);
         const items = [];
 
         galleryIds.forEach(galleryId => {
             const historyRecord = historyRecords.get(galleryId);
-            const queueRecord = queueRecords.get(galleryId);
             const unifiedRecord = unifiedRecords.get(galleryId);
+            const downloadedAt = historyRecord?.downloadedAt || unifiedRecord?.downloadedAt || '';
+
+            // Ignore unfinished records left by queue-enabled versions; no worker remains to resolve them.
+            if (!downloadedAt && unifiedRecord?.status !== 'done' && !historyRecord) return;
 
             items.push({
                 id: `gallery-${galleryId}`,
                 galleryId: String(galleryId),
-                url: unifiedRecord?.url || queueRecord?.url || historyRecord?.url || '',
-                title: unifiedRecord?.title || historyRecord?.title || queueRecord?.title || '',
+                url: unifiedRecord?.url || historyRecord?.url || '',
+                title: unifiedRecord?.title || historyRecord?.title || '',
                 group: unifiedRecord?.group || historyRecord?.group || '',
                 author: unifiedRecord?.author || historyRecord?.author || '',
-                source: queueRecord?.source || unifiedRecord?.source || '',
-                status: unifiedRecord?.status || queueRecord?.status || (historyRecord ? 'done' : 'pending'),
-                createdAt: unifiedRecord?.createdAt || queueRecord?.createdAt || '',
-                updatedAt: unifiedRecord?.updatedAt || queueRecord?.updatedAt || '',
-                startedAt: unifiedRecord?.startedAt || queueRecord?.startedAt || null,
-                finishedAt: unifiedRecord?.finishedAt || queueRecord?.finishedAt || null,
-                downloadedAt: historyRecord?.downloadedAt
-                    || unifiedRecord?.downloadedAt
-                    || (queueRecord?.status === 'done' ? queueRecord.finishedAt : '')
-                    || '',
-                heartbeatAt: unifiedRecord?.heartbeatAt || queueRecord?.heartbeatAt || null,
-                workerId: unifiedRecord?.workerId || queueRecord?.workerId || null,
-                error: unifiedRecord?.error || queueRecord?.error || '',
+                status: 'done',
+                updatedAt: unifiedRecord?.updatedAt || '',
+                downloadedAt,
                 metadataHydrated: historyRecord?.metadataHydrated === true || unifiedRecord?.metadataHydrated === true
             });
         });
@@ -2371,34 +2200,6 @@
 
     async function saveUnifiedDownloads(store) {
         await GM.setValue(unifiedDownloadsKey, normalizeUnifiedDownloads(store));
-    }
-
-    function prepareUnifiedDownloadsForWrite(store) {
-        const now = Date.now();
-        const nowIso = new Date(now).toISOString();
-
-        // Unified terminal records are durable. Only abandoned running work is
-        // recovered here; the 60-second terminal TTL is a display concern.
-        store.items = store.items.map(item => {
-            if (
-                item.status === 'running'
-                && item.workerId !== downloadQueueWorkerId
-                && (!item.heartbeatAt || now - Date.parse(item.heartbeatAt) > downloadQueueStaleRunningMs)
-            ) {
-                return {
-                    ...item,
-                    status: 'pending',
-                    updatedAt: nowIso,
-                    startedAt: null,
-                    heartbeatAt: null,
-                    workerId: null,
-                    error: ''
-                };
-            }
-            return item;
-        });
-
-        return store;
     }
 
     async function withUnifiedDownloadsLock(task) {
@@ -2417,27 +2218,14 @@
             const store = await loadUnifiedStoreOnly();
             const before = JSON.stringify(store);
 
-            prepareUnifiedDownloadsForWrite(store);
+            // Queue-era unfinished records have no worker now; remove them whenever the history is next saved.
+            store.items = store.items.filter(item => item.status === 'done' || item.downloadedAt);
             const result = await mutator(store);
 
             if (JSON.stringify(store) !== before) {
                 await saveUnifiedDownloads(store);
             }
             return result;
-        });
-    }
-
-    function markUnifiedDownload(galleryId, changes) {
-        const normalizedGalleryId = String(galleryId);
-        return updateUnifiedDownloads(store => {
-            const item = store.items.find(candidate => candidate.galleryId === normalizedGalleryId);
-            if (!item) return null;
-
-            const nextChanges = typeof changes === 'function' ? changes(item) : changes;
-            if (!nextChanges) return item;
-
-            Object.assign(item, nextChanges, { updatedAt: new Date().toISOString() });
-            return item;
         });
     }
 
@@ -2494,227 +2282,6 @@
             ...(metadataHydrated ? { metadataHydrated: true } : {})
         }));
     }
-
-    function dequeueUnifiedDownload(galleryId, existingStore = null) {
-        const normalizedGalleryId = String(galleryId);
-        const mutator = store => {
-            const item = store.items.find(candidate => candidate.galleryId === normalizedGalleryId);
-            if (!item) return null;
-
-            if (item.downloadedAt) {
-                const now = new Date().toISOString();
-                Object.assign(item, {
-                    status: 'done',
-                    updatedAt: now,
-                    startedAt: null,
-                    finishedAt: item.downloadedAt,
-                    heartbeatAt: null,
-                    workerId: null,
-                    error: ''
-                });
-            } else {
-                store.items = store.items.filter(candidate => candidate !== item);
-            }
-            return item;
-        };
-
-        return existingStore ? mutator(existingStore) : updateUnifiedDownloads(mutator);
-    }
-
-    function enqueueUnifiedDownload(target) {
-        const galleryId = String(target.galleryId);
-        return updateUnifiedDownloads(store => {
-            let item = store.items.find(candidate => candidate.galleryId === galleryId);
-
-            if (!item) {
-                const now = new Date().toISOString();
-                item = {
-                    id: `gallery-${galleryId}`,
-                    galleryId,
-                    url: String(target.url || ''),
-                    title: String(target.title || ''),
-                    group: '',
-                    author: '',
-                    source: String(target.source || ''),
-                    status: 'pending',
-                    createdAt: now,
-                    updatedAt: now,
-                    startedAt: null,
-                    finishedAt: null,
-                    downloadedAt: '',
-                    heartbeatAt: null,
-                    workerId: null,
-                    error: '',
-                    metadataHydrated: false
-                };
-                store.items.push(item);
-                return { action: 'queued', item };
-            }
-
-            if (isTerminalDownloadQueueStatus(item.status)) {
-                const now = new Date().toISOString();
-                Object.assign(item, {
-                    status: 'pending',
-                    updatedAt: now,
-                    startedAt: null,
-                    finishedAt: null,
-                    heartbeatAt: null,
-                    workerId: null,
-                    error: ''
-                });
-                if (target.title) item.title = String(target.title);
-                if (target.url) item.url = String(target.url);
-                return { action: 'queued', item };
-            }
-
-            if (item.status === 'pending') {
-                const removedItem = { ...item };
-                dequeueUnifiedDownload(galleryId, store);
-                return { action: 'removed', item: removedItem };
-            }
-
-            return { action: 'already-running', item };
-        });
-    }
-
-    async function claimNextUnifiedDownload() {
-        const legacyQueue = await loadDownloadQueue();
-        const migrationQueue = prepareDownloadQueueForWrite({
-            ...legacyQueue,
-            items: legacyQueue.items.map(item => ({ ...item }))
-        });
-
-        return updateUnifiedDownloads(store => {
-            const now = new Date().toISOString();
-            // The legacy queue remains read-only and is imported lazily so users
-            // do not lose pending work when upgrading from the split stores.
-            migrationQueue.items
-                .filter(item => item.status === 'pending' || item.status === 'running')
-                .forEach(legacyItem => {
-                    const galleryId = String(legacyItem.galleryId);
-                    let item = store.items.find(candidate => candidate.galleryId === galleryId);
-                    if (item && getTimestamp(item.updatedAt) >= getTimestamp(legacyItem.updatedAt)) return;
-
-                    if (!item) {
-                        item = {
-                            id: `gallery-${galleryId}`,
-                            galleryId,
-                            url: '',
-                            title: '',
-                            group: '',
-                            author: '',
-                            source: '',
-                            status: 'pending',
-                            createdAt: '',
-                            updatedAt: '',
-                            startedAt: null,
-                            finishedAt: null,
-                            downloadedAt: '',
-                            heartbeatAt: null,
-                            workerId: null,
-                            error: '',
-                            metadataHydrated: false
-                        };
-                        store.items.push(item);
-                    }
-
-                    Object.assign(item, {
-                        url: legacyItem.url,
-                        title: legacyItem.title,
-                        source: legacyItem.source,
-                        status: legacyItem.status,
-                        createdAt: legacyItem.createdAt || now,
-                        updatedAt: legacyItem.updatedAt || now,
-                        startedAt: legacyItem.startedAt,
-                        finishedAt: legacyItem.finishedAt,
-                        heartbeatAt: legacyItem.heartbeatAt,
-                        workerId: legacyItem.workerId,
-                        error: legacyItem.error
-                    });
-                });
-
-            const runningCount = store.items.filter(item => item.status === 'running').length;
-            if (runningCount >= maxGlobalDownloadCount) return null;
-
-            const item = store.items
-                .filter(candidate => candidate.status === 'pending')
-                .sort((a, b) => getTimestamp(a.createdAt) - getTimestamp(b.createdAt))[0];
-            if (!item) return null;
-
-            Object.assign(item, {
-                status: 'running',
-                updatedAt: now,
-                startedAt: now,
-                heartbeatAt: now,
-                workerId: downloadQueueWorkerId,
-                error: ''
-            });
-            return { ...item };
-        });
-    }
-
-    async function loadDownloadQueue() {
-        return normalizeDownloadQueue(await GM.getValue(downloadQueueKey, { version: 1, items: [] }));
-    }
-
-    function isTerminalDownloadQueueStatus(status) {
-        return ['done', 'error', 'canceled'].includes(status);
-    }
-
-    function prepareDownloadQueueForWrite(queue) {
-        const now = Date.now();
-        const nowIso = new Date(now).toISOString();
-
-        queue.items = queue.items
-            .map(item => {
-                if (
-                    item.status === 'running'
-                    && item.workerId !== downloadQueueWorkerId
-                    && (!item.heartbeatAt || now - Date.parse(item.heartbeatAt) > downloadQueueStaleRunningMs)
-                ) {
-                    return {
-                        ...item,
-                        status: 'pending',
-                        updatedAt: nowIso,
-                        startedAt: null,
-                        heartbeatAt: null,
-                        workerId: null,
-                        error: ''
-                    };
-                }
-                return item;
-            })
-            .filter(item => !isTerminalDownloadQueueStatus(item.status) || !item.finishedAt || now - Date.parse(item.finishedAt) <= downloadQueueTerminalTtlMs);
-
-        return queue;
-    }
-
-
-    function getBookQueueTarget(book) {
-        const link = getBookLinkFromElement(book);
-        const galleryId = getBookIdFromElement(book);
-        if (!link || !galleryId) return null;
-
-        return {
-            galleryId,
-            url: new URL(link.getAttribute('href'), location.href).href,
-            title: book.querySelector('h1.lillie')?.textContent.trim() || '',
-            source: 'list'
-        };
-    }
-
-    function getCurrentBookQueueTarget() {
-        const galleryId = getCurrentGalleryId();
-        if (!galleryId) return null;
-
-        return {
-            galleryId,
-            url: location.href,
-            title: getBookPageTitle(document, getVerifiedPageGalleryInfo(galleryId), galleryId),
-            source: 'book'
-        };
-    }
-
 
     function markDLButtonDownloaded() {
         const heading = document.querySelector('a#dl-button > h1');
@@ -3050,8 +2617,6 @@
         return {
             canceled: false,
             cancelWait: null,
-            heartbeatTimer: null,
-            queueGalleryId: null,
             previousText,
             xhr: null
         };
@@ -3069,60 +2634,13 @@
         downloadState.canceled = true;
         downloadState.cancelWait?.();
         downloadState.xhr?.abort();
-        if (downloadState.heartbeatTimer) {
-            window.clearInterval(downloadState.heartbeatTimer);
-        }
         hideBookPageDownloadProgress();
         setDLButtonText('CANCELED');
         restoreDLButtonTextWhenIdle(downloadState, 1000);
     }
 
-    function getVisibleBookForGalleryId(galleryId) {
-        return getBooks().find(book => getBookIdFromElement(book) === String(galleryId)) || null;
-    }
-
-    function markQueuedDownloadCompleted(queueItem, galleryInfo, visibleBook) {
-        const isCurrentBook = String(getCurrentGalleryId()) === String(queueItem.galleryId);
-        const metadataRoot = isCurrentBook ? document : document.createElement('div');
-        const metadata = getDownloadHistoryMetadata(metadataRoot, galleryInfo, queueItem.galleryId);
-        const write = recordUnifiedDownloadDone({
-            galleryId: String(queueItem.galleryId),
-            url: queueItem.url || location.href,
-            title: metadata.title,
-            group: metadata.group,
-            author: metadata.author,
-            source: queueItem.source,
-            metadataHydrated: metadata.metadataHydrated
-        });
-
-        if (visibleBook) {
-            setBookDownloadedIndicator(visibleBook, true);
-            getFilterBook(visibleBook).fold();
-        } else if (!isCurrentBook) {
-            write.then(() => refreshDownloadIndicators()).catch(() => {});
-        }
-        return write;
-    }
-
-    function startDownloadQueueHeartbeat(downloadState) {
-        if (!downloadState.queueGalleryId) return;
-
-        downloadState.heartbeatTimer = window.setInterval(() => {
-            markUnifiedDownload(downloadState.queueGalleryId, item => item.status === 'running'
-                ? { heartbeatAt: new Date().toISOString() }
-                : null).catch(() => {});
-        }, downloadQueueHeartbeatInterval);
-    }
-
-    function stopDownloadQueueHeartbeat(downloadState) {
-        if (!downloadState.heartbeatTimer) return;
-
-        window.clearInterval(downloadState.heartbeatTimer);
-        downloadState.heartbeatTimer = null;
-    }
-
-    async function buildAndSaveGalleryArchive(queueItem, downloadState, onProgress) {
-        const galleryId = String(queueItem.galleryId);
+    async function buildAndSaveGalleryArchive(galleryId, downloadState, onProgress) {
+        galleryId = String(galleryId);
         const [gg, galleryInfo] = await Promise.all([
             waitForHitomiGg(),
             String(getCurrentGalleryId()) === galleryId
@@ -3146,9 +2664,6 @@
 
             zip.file(imageName, await retryDownloadBlob(url, downloadState), { binary: true });
             onProgress(`${i + 1} / ${galleryInfo.files.length}`, (i + 1) / galleryInfo.files.length * 100);
-            await markUnifiedDownload(queueItem.galleryId, item => item.status === 'running'
-                ? { heartbeatAt: new Date().toISOString() }
-                : null);
             await wait(1000, downloadState);
         }
 
@@ -3162,202 +2677,81 @@
         return galleryInfo;
     }
 
-    async function runQueuedDownload(queueItem) {
-        const visibleBook = getVisibleBookForGalleryId(queueItem.galleryId);
-        const isCurrentBookPage = !visibleBook && String(getCurrentGalleryId()) === String(queueItem.galleryId);
-        const downloadProgress = visibleBook ? createBookDownloadProgress(visibleBook) : null;
-        const downloadState = isCurrentBookPage ? createBookPageDownloadState('DOWNLOAD') : createListDownloadState(downloadProgress);
-
-        downloadState.queueGalleryId = String(queueItem.galleryId);
-        activeQueuedDownloads.set(String(queueItem.galleryId), downloadState);
-        if (isCurrentBookPage) {
-            activeBookPageDownload = downloadState;
-            showBookPageDownloadProgress();
-        }
-        if (visibleBook) {
-            activeListDownloads.set(String(queueItem.galleryId), downloadState);
-            updateListDownloadTitle();
+    async function downloadBook(dlButton) {
+        if (!dlButton) return false;
+        if (activeBookPageDownload) {
+            cancelBookPageDownload(activeBookPageDownload);
+            return false;
         }
 
-        startDownloadQueueHeartbeat(downloadState);
+        const galleryId = getCurrentGalleryId();
+        if (!galleryId) return false;
+
+        const downloadState = createBookPageDownloadState();
+        activeBookPageDownload = downloadState;
         try {
-            if (isCurrentBookPage) {
-                updateBookPageDownloadProgress(0, 'Loading...');
-            } else if (downloadProgress) {
-                updateBookDownloadProgress(downloadProgress, 'Loading...', 0);
-            } else {
-                showListDownloadNotice(`Downloading ${queueItem.title || queueItem.galleryId}`);
-            }
-
-            const galleryInfo = await buildAndSaveGalleryArchive(queueItem, downloadState, (text, percent) => {
-                if (isCurrentBookPage) {
-                    updateBookPageDownloadProgress(percent, text);
-                } else if (downloadProgress) {
-                    updateBookDownloadProgress(downloadProgress, text, percent);
-                }
+            showBookPageDownloadProgress();
+            updateBookPageDownloadProgress(0, 'Loading...');
+            const galleryInfo = await buildAndSaveGalleryArchive(galleryId, downloadState, (text, percent) => {
+                updateBookPageDownloadProgress(percent, text);
             });
-
-            await markQueuedDownloadCompleted(queueItem, galleryInfo, visibleBook);
-            if (isCurrentBookPage) {
-                hideBookPageDownloadProgress();
-                setDLButtonText('DOWNLOADED');
-                if (await loadCloseBookPageAfterDownload()) {
-                    closeCurrentTab();
-                }
-            } else if (downloadProgress) {
-                finishBookDownloadProgress(downloadProgress, 'Downloaded', bookDownloadDoneClassName);
-                window.setTimeout(() => hideBookDownloadProgress(downloadProgress), 1400);
-            } else {
-                showListDownloadNotice('Downloaded');
-            }
-            await markUnifiedDownload(queueItem.galleryId, {
-                status: 'done',
-                finishedAt: new Date().toISOString(),
-                heartbeatAt: null,
-                workerId: null,
-                error: ''
-            });
+            hideBookPageDownloadProgress();
+            markCurrentBookDownloaded(galleryInfo, galleryId);
+            if (await loadCloseBookPageAfterDownload()) closeCurrentTab();
             return true;
         } catch (e) {
             const canceled = isDownloadCanceledError(e);
             const animeNotSupported = isAnimeNotSupportedError(e);
             if (!canceled && !animeNotSupported) console.error(e);
-            const failureText = animeNotSupported ? 'Anime not supported' : 'Download failed';
-
-            if (isCurrentBookPage) {
-                hideBookPageDownloadProgress();
-                setDLButtonText(canceled ? 'CANCELED' : animeNotSupported ? 'ANIME NOT SUPPORTED' : 'DOWNLOAD FAILED');
-                restoreDLButtonTextWhenIdle(downloadState, 1800);
-            } else if (downloadProgress) {
-                finishBookDownloadProgress(downloadProgress, canceled ? 'Canceled' : failureText, canceled ? bookDownloadCanceledClassName : bookDownloadErrorClassName);
-                window.setTimeout(() => hideBookDownloadProgress(downloadProgress), 1800);
-            } else {
-                showListDownloadNotice(canceled ? 'Canceled' : failureText);
-            }
-            await markUnifiedDownload(queueItem.galleryId, {
-                status: canceled ? 'canceled' : 'error',
-                finishedAt: new Date().toISOString(),
-                heartbeatAt: null,
-                workerId: null,
-                error: canceled ? '' : String(e?.message || e)
-            });
+            hideBookPageDownloadProgress();
+            setDLButtonText(canceled ? 'CANCELED' : animeNotSupported ? 'ANIME NOT SUPPORTED' : 'DOWNLOAD FAILED');
+            restoreDLButtonTextWhenIdle(downloadState, 1800);
             return false;
         } finally {
-            stopDownloadQueueHeartbeat(downloadState);
-            activeQueuedDownloads.delete(String(queueItem.galleryId));
-            if (activeBookPageDownload === downloadState) {
-                activeBookPageDownload = null;
-            }
-            if (activeListDownloads.get(String(queueItem.galleryId)) === downloadState) {
-                activeListDownloads.delete(String(queueItem.galleryId));
-                updateListDownloadTitle();
-            }
-            scheduleDownloadQueueWorker();
+            if (activeBookPageDownload === downloadState) activeBookPageDownload = null;
         }
     }
 
-    async function processDownloadQueue() {
-        if (downloadQueueWorkerRunning) return;
-
-        downloadQueueWorkerRunning = true;
-        try {
-            while (activeQueuedDownloads.size < maxGlobalDownloadCount) {
-                const item = await claimNextUnifiedDownload();
-                if (!item) break;
-
-                runQueuedDownload(item).catch(() => {});
-            }
-        } finally {
-            downloadQueueWorkerRunning = false;
-        }
-    }
-
-    function scheduleDownloadQueueWorker() {
-        processDownloadQueue().catch(() => {});
-        syncVisibleQueuedBookBadges().catch(() => {});
-    }
-
-    function installDownloadQueueWorker() {
-        if (downloadQueueWorkerTimer) return;
-
-        scheduleDownloadQueueWorker();
-        downloadQueueWorkerTimer = window.setInterval(() => {
-            scheduleDownloadQueueWorker();
-        }, downloadQueueWorkerInterval);
-    }
-
-    async function toggleQueuedDownload(target) {
-        const activeDownload = activeQueuedDownloads.get(String(target.galleryId));
-        if (activeDownload) {
-            if (activeDownload === activeBookPageDownload) {
-                cancelBookPageDownload(activeDownload);
-            } else {
-                cancelListDownload(activeDownload);
-            }
-            return 'canceled';
-        }
-
-        const result = await enqueueUnifiedDownload(target);
-        scheduleDownloadQueueWorker();
-        return result.action;
-    }
-
-    function showDownloadQueueAction(target, action) {
-        const messages = {
-            queued: 'Queued',
-            removed: 'Removed from queue',
-            canceled: 'Canceled',
-            'already-running': 'Downloading in another tab'
-        };
-        const message = messages[action];
-        if (!message) return;
-
-        if (target.source === 'book' && String(getCurrentGalleryId()) === String(target.galleryId)) {
-            const previousText = getDLButtonText();
-            setDLButtonText(message.toUpperCase());
-            window.setTimeout(() => {
-                if (!activeQueuedDownloads.has(String(target.galleryId))) {
-                    setDLButtonText(action === 'queued' ? 'QUEUED' : action === 'already-running' ? previousText : 'DOWNLOAD');
-                }
-            }, 1200);
-            return;
-        }
-
-        const visibleBook = getVisibleBookForGalleryId(target.galleryId);
-        if (visibleBook) {
-            if (action === 'queued') {
-                showBookQueueBadge(visibleBook, 'Queued');
-                return;
-            }
-
-            const progress = createBookDownloadProgress(visibleBook);
-            finishBookDownloadProgress(progress, message, action === 'canceled' ? bookDownloadCanceledClassName : bookDownloadDoneClassName);
-            window.setTimeout(() => hideBookDownloadProgress(progress), 1000);
-            return;
-        }
-
-        showListDownloadNotice(message);
-    }
-
-    async function handleQueuedBookPageDownload() {
-        const target = getCurrentBookQueueTarget();
-        if (!target) return false;
-
-        const action = await toggleQueuedDownload(target);
-        showDownloadQueueAction(target, action);
-        return true;
-    }
-
-    async function handleQueuedFocusedBookDownload() {
-        const book = getFocusedBook();
+    async function downloadFocusedBookFromList() {
+        const book = focusedBook;
         if (!book) return false;
 
-        const target = getBookQueueTarget(book);
-        if (!target) return false;
+        const galleryId = getBookIdFromElement(book);
+        if (!galleryId) return false;
+        if (activeListDownloads.has(galleryId)) {
+            cancelListDownload(activeListDownloads.get(galleryId));
+            return false;
+        }
+        if (activeListDownloads.size >= maxListDownloadCount) {
+            showListDownloadNotice(`Up to ${maxListDownloadCount} list downloads can run at once.`);
+            return false;
+        }
 
-        const action = await toggleQueuedDownload(target);
-        showDownloadQueueAction(target, action);
-        return true;
+        const downloadProgress = createBookDownloadProgress(book);
+        const downloadState = createListDownloadState(downloadProgress);
+        activeListDownloads.set(galleryId, downloadState);
+        updateListDownloadTitle();
+        try {
+            updateBookDownloadProgress(downloadProgress, 'Loading...', 0);
+            const galleryInfo = await buildAndSaveGalleryArchive(galleryId, downloadState, (text, percent) => {
+                updateBookDownloadProgress(downloadProgress, text, percent);
+            });
+            markListBookDownloaded(book, galleryInfo);
+            finishBookDownloadProgress(downloadProgress, 'Downloaded', bookDownloadDoneClassName);
+            window.setTimeout(() => hideBookDownloadProgress(downloadProgress), 1400);
+            return true;
+        } catch (e) {
+            const canceled = isDownloadCanceledError(e);
+            const animeNotSupported = isAnimeNotSupportedError(e);
+            if (!canceled && !animeNotSupported) console.error(e);
+            if (canceled) return false;
+            finishBookDownloadProgress(downloadProgress, animeNotSupported ? 'Anime not supported' : 'Download failed', bookDownloadErrorClassName);
+            window.setTimeout(() => hideBookDownloadProgress(downloadProgress), 1800);
+            return false;
+        } finally {
+            activeListDownloads.delete(galleryId);
+            updateListDownloadTitle();
+        }
     }
 
     function getListDownloadProgressStack() {
@@ -3409,8 +2803,7 @@
 
         label.className = bookDownloadProgressLabelClassName;
         book.querySelectorAll(`:scope > .${bookDownloadProgressLabelClassName}`).forEach(elem => elem.remove());
-        queuedBookProgress.delete(book);
-        book.classList.remove(bookDownloadDoneClassName, bookDownloadCanceledClassName, bookDownloadErrorClassName, bookDownloadRemoteClassName);
+        book.classList.remove(bookDownloadDoneClassName, bookDownloadCanceledClassName, bookDownloadErrorClassName);
         book.classList.add(bookDownloadProgressClassName);
         book.style.setProperty('--hitomi-tweak-download-percent', '0%');
         book.appendChild(label);
@@ -3435,69 +2828,13 @@
         if (!downloadProgress.label.isConnected) return;
 
         downloadProgress.label.remove();
-        queuedBookProgress.delete(downloadProgress.book);
         downloadProgress.book.classList.remove(
             bookDownloadProgressClassName,
             bookDownloadDoneClassName,
             bookDownloadCanceledClassName,
-            bookDownloadErrorClassName,
-            bookDownloadRemoteClassName
+            bookDownloadErrorClassName
         );
         downloadProgress.book.style.removeProperty('--hitomi-tweak-download-percent');
-    }
-
-    function showBookQueueBadge(book, text) {
-        if (!book?.isConnected) return null;
-
-        const existing = queuedBookProgress.get(book);
-        if (existing?.label.isConnected) {
-            updateBookDownloadProgress(existing, text, 0);
-            return existing;
-        }
-
-        const progress = createBookDownloadProgress(book);
-        updateBookDownloadProgress(progress, text, 0);
-        queuedBookProgress.set(book, progress);
-        return progress;
-    }
-
-    async function syncVisibleQueuedBookBadges() {
-        const items = (await loadUnifiedStoreOnly()).items;
-        const pendingIds = new Set();
-        const remoteRunningIds = new Set();
-        const doneIds = new Set();
-        items.forEach(item => {
-            const galleryId = String(item.galleryId);
-            if (item.status === 'pending') pendingIds.add(galleryId);
-            if (item.status === 'running' && !activeQueuedDownloads.has(galleryId)) remoteRunningIds.add(galleryId);
-            if (item.status === 'done' || item.downloadedAt) doneIds.add(galleryId);
-        });
-        const keepIds = new Set([...pendingIds, ...remoteRunningIds]);
-
-        for (const [book, progress] of Array.from(queuedBookProgress.entries())) {
-            const galleryId = getBookIdFromElement(book);
-            if (!book.isConnected || !galleryId || !keepIds.has(galleryId)) {
-                hideBookDownloadProgress(progress);
-                queuedBookProgress.delete(book);
-                // Apply the remote completion transition only when its badge disappears. Deleting
-                // the entry makes this one-shot, so a later manual unfold is not undone by polling.
-                if (book.isConnected && galleryId && doneIds.has(galleryId)) {
-                    setBookDownloadedIndicator(book, true);
-                    getFilterBook(book).fold();
-                }
-            }
-        }
-
-        getBooks().forEach(book => {
-            const galleryId = getBookIdFromElement(book);
-            if (galleryId && pendingIds.has(galleryId) && !activeQueuedDownloads.has(galleryId)) {
-                showBookQueueBadge(book, 'Queued');
-                book.classList.remove(bookDownloadRemoteClassName);
-            } else if (galleryId && remoteRunningIds.has(galleryId)) {
-                showBookQueueBadge(book, 'Downloading');
-                book.classList.add(bookDownloadRemoteClassName);
-            }
-        });
     }
 
     function createDownloadCanceledError() {
@@ -3740,8 +3077,6 @@
         return {
             canceled: false,
             cancelWait: null,
-            heartbeatTimer: null,
-            queueGalleryId: null,
             progress: downloadProgress,
             xhr: null
         };
@@ -3766,9 +3101,6 @@
         downloadState.canceled = true;
         downloadState.cancelWait?.();
         downloadState.xhr?.abort();
-        if (downloadState.heartbeatTimer) {
-            window.clearInterval(downloadState.heartbeatTimer);
-        }
         if (downloadState.progress) {
             finishBookDownloadProgress(downloadState.progress, 'Canceled', bookDownloadCanceledClassName);
             window.setTimeout(() => hideBookDownloadProgress(downloadState.progress), 1000);
@@ -3777,7 +3109,7 @@
 
     function installDownloadNavigationGuard() {
         window.addEventListener('beforeunload', e => {
-            if (!activeBookPageDownload && activeListDownloads.size === 0 && activeQueuedDownloads.size === 0) return;
+            if (!activeBookPageDownload && activeListDownloads.size === 0) return;
 
             e.preventDefault();
             e.returnValue = '';
@@ -4059,13 +3391,13 @@
 
             e.preventDefault();
             if (getFocusedBook()) {
-                handleQueuedFocusedBookDownload();
+                downloadFocusedBookFromList();
                 return;
             }
 
             const dlButton = getDLButton();
             if (dlButton) {
-                handleQueuedBookPageDownload();
+                downloadBook(dlButton);
             }
             return;
         }
@@ -4216,7 +3548,6 @@
         installEnhancer();
         installDownloadNavigationGuard();
         installHistory();
-        installDownloadQueueWorker();
         await installFilter();
     }
 
