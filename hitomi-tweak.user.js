@@ -318,6 +318,24 @@
     function installStyles() {
         const style = document.createElement('style');
         style.textContent = `
+            /* The .container ancestor clips with overflow:hidden, which disables
+               position:sticky, so relax it to keep the header pinned on scroll. */
+            div.container {
+                overflow: visible;
+            }
+
+            div.navbar {
+                position: sticky;
+                top: 0;
+                z-index: 1000;
+            }
+
+            div.top-content {
+                position: sticky;
+                top: 40px;
+                z-index: 999;
+            }
+
             .hitomi-folded h1.lillie {
                 padding-left: 0 !important;
                 font-size: 0.9em !important;
