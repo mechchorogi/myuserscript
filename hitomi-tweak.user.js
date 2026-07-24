@@ -1453,17 +1453,30 @@
             .hitomi-name-map-table tr:last-child td {
                 border-bottom: 0;
             }
-            .hitomi-name-map-editable {
-                cursor: text;
+            .hitomi-name-map-search-link {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                margin-left: 6px;
+                color: #57606a;
+                vertical-align: middle;
             }
-            .hitomi-name-map-editable input {
+            .hitomi-name-map-search-link:hover {
+                color: #0969da;
+            }
+            .hitomi-name-map-japanese-input {
                 box-sizing: border-box;
                 width: 100%;
                 min-height: 30px;
                 padding: 4px 6px;
-                border: 1px solid #0969da;
+                border: 1px solid #d0d7de;
                 border-radius: 4px;
+                background: #fff;
                 font: inherit;
+            }
+            .hitomi-name-map-japanese-input:focus {
+                border-color: #0969da;
+                outline: none;
             }
         `;
         document.head.appendChild(style);
@@ -1558,60 +1571,54 @@
                 const actionTd = document.createElement('td');
                 const deleteBtn = document.createElement('button');
 
+                const hitomiCategoryPath = entry.kind === 'author' ? 'artist' : entry.kind === 'series' ? 'series' : 'group';
                 const romajiLink = document.createElement('a');
-                romajiLink.href = `https://www.google.com/search?q=${encodeURIComponent(entry.romaji)}`;
+                romajiLink.href = `https://hitomi.la/${hitomiCategoryPath}/${encodeURIComponent(entry.romaji)}-all.html`;
                 romajiLink.target = '_blank';
                 romajiLink.rel = 'noopener noreferrer';
                 romajiLink.textContent = entry.romaji;
-                romajiTd.appendChild(romajiLink);
-                japaneseTd.textContent = entry.japanese;
-                japaneseTd.className = 'hitomi-name-map-editable';
-                japaneseTd.title = 'Click to edit';
+
+                const searchLink = document.createElement('a');
+                searchLink.href = `https://www.google.com/search?q=${encodeURIComponent(entry.romaji)}`;
+                searchLink.target = '_blank';
+                searchLink.rel = 'noopener noreferrer';
+                searchLink.className = 'hitomi-name-map-search-link';
+                searchLink.title = 'Search on Google';
+                searchLink.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" d="M11 6.5A4.5 4.5 0 1 1 6.5 2a4.5 4.5 0 0 1 4.5 4.5Z"/><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M10 10l4 4"/></svg>';
+
+                romajiTd.append(romajiLink, searchLink);
+                const japaneseInput = document.createElement('input');
+                japaneseInput.type = 'text';
+                japaneseInput.className = 'hitomi-name-map-japanese-input';
+                japaneseInput.value = entry.japanese;
+                japaneseInput.placeholder = '';
+                japaneseTd.appendChild(japaneseInput);
                 kindTd.textContent = entry.kind;
                 deleteBtn.type = 'button';
                 deleteBtn.textContent = 'Delete';
 
-                japaneseTd.addEventListener('click', () => {
-                    if (japaneseTd.querySelector('input')) return;
+                japaneseInput.addEventListener('keydown', event => {
+                    if (event.isComposing) return;
+                    if (event.key === 'Enter') {
+                        event.preventDefault();
+                        japaneseInput.blur();
+                    } else if (event.key === 'Escape') {
+                        japaneseInput.value = entry.japanese;
+                        japaneseInput.blur();
+                    }
+                });
 
-                    const input = document.createElement('input');
-                    let canceled = false;
-                    input.type = 'text';
-                    input.value = entry.japanese;
-                    japaneseTd.replaceChildren(input);
-                    input.focus();
-                    input.select();
+                japaneseInput.addEventListener('blur', async () => {
+                    const nextValue = japaneseInput.value.trim();
+                    if (nextValue === entry.japanese) return;
 
-                    input.addEventListener('keydown', event => {
-                        if (event.isComposing) return;
-                        if (event.key === 'Enter') {
-                            event.preventDefault();
-                            input.blur();
-                        } else if (event.key === 'Escape') {
-                            canceled = true;
-                            renderTable();
-                        }
+                    entry.japanese = nextValue;
+                    await updateNameMap(map => {
+                        map[entry.kind][entry.romaji] = nextValue;
+                        return true;
                     });
-
-                    input.addEventListener('blur', async () => {
-                        if (canceled) return;
-
-                        const nextValue = input.value.trim();
-                        if (!nextValue) {
-                            setStatus('Japanese name is required.');
-                            renderTable();
-                            return;
-                        }
-
-                        if (nextValue !== entry.japanese) {
-                            await updateNameMap(map => {
-                                map[entry.kind][entry.romaji] = nextValue;
-                                return true;
-                            });
-                            setStatus(`Updated ${entry.romaji}. ${getNameMapEntryStatus()}`);
-                        }
-                        renderTable();
-                    }, { once: true });
+                    setStatus(`Updated ${entry.romaji}. ${getNameMapEntryStatus()}`);
+                    renderTable();
                 });
 
                 deleteBtn.addEventListener('click', async () => {
