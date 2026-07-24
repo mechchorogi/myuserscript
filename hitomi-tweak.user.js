@@ -374,6 +374,28 @@
                 z-index: 999;
             }
 
+            #hitomi-page-progress-bar {
+                cursor: pointer;
+            }
+
+            #hitomi-page-progress-bar:hover #hitomi-page-progress-track {
+                box-shadow: 0 0 4px limegreen;
+                transition: box-shadow 120ms ease;
+            }
+
+            #hitomi-page-progress-tooltip {
+                position: absolute;
+                bottom: calc(100% + 4px);
+                padding: 2px 6px;
+                border-radius: 3px;
+                background: rgba(0, 0, 0, 0.8);
+                color: #fff;
+                font-size: 11px;
+                pointer-events: none;
+                white-space: nowrap;
+                transform: translateX(-50%);
+            }
+
             .hitomi-folded h1.lillie {
                 padding-left: 0 !important;
                 font-size: 0.9em !important;
@@ -3729,11 +3751,19 @@
         const progressBar = document.createElement('div');
         progressBar.id = 'hitomi-page-progress-bar';
         progressBar.style.width = '100%';
-        progressBar.style.height = '4px';
-        progressBar.style.background = '#555';
         progressBar.style.marginTop = '4px';
-        progressBar.style.borderRadius = '2px';
-        progressBar.style.direction = 'rtl';
+        progressBar.style.boxSizing = 'border-box';
+        progressBar.style.padding = '8px 0';
+        progressBar.style.cursor = 'pointer';
+        progressBar.style.position = 'relative';
+
+        const progressTrack = document.createElement('div');
+        progressTrack.id = 'hitomi-page-progress-track';
+        progressTrack.style.height = '4px';
+        progressTrack.style.background = '#555';
+        progressTrack.style.borderRadius = '2px';
+        progressTrack.style.direction = 'rtl';
+        progressTrack.style.position = 'relative';
 
         const progressFill = document.createElement('div');
         progressFill.id = 'hitomi-page-progress-fill';
@@ -3743,9 +3773,81 @@
         progressFill.style.borderRadius = '2px';
         progressFill.style.marginLeft = 'auto';
 
-        progressBar.appendChild(progressFill);
+        const progressTooltip = document.createElement('span');
+        progressTooltip.id = 'hitomi-page-progress-tooltip';
+        progressTooltip.style.position = 'absolute';
+        progressTooltip.style.pointerEvents = 'none';
+        progressTooltip.style.display = 'none';
+
+        progressTrack.appendChild(progressFill);
+        progressBar.append(progressTrack, progressTooltip);
         progressContainer.append(progressDisplay, progressBar);
         li.appendChild(progressContainer);
+
+        function pageFromClientX(clientX) {
+            const barRect = progressBar.getBoundingClientRect();
+            const ratio = Math.min(1, Math.max(0, (barRect.right - clientX) / barRect.width));
+            const total = document.querySelector('#single-page-select')?.options.length || 1;
+            return ratio === 0 ? 1 : Math.ceil(ratio * total);
+        }
+
+        function applyPreview(page) {
+            const total = document.querySelector('#single-page-select')?.options.length || 1;
+            progressDisplay.textContent = `${page} / ${total}`;
+            progressFill.style.width = `${(page / total) * 100}%`;
+        }
+
+        function commitNavigation(page) {
+            const select = document.querySelector('#single-page-select');
+            if (!select) return;
+
+            select.value = String(page);
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+            applyPreview(page);
+        }
+
+        function updateTooltipPosition(clientX) {
+            const barRect = progressBar.getBoundingClientRect();
+            const left = Math.min(barRect.width, Math.max(0, clientX - barRect.left));
+            progressTooltip.textContent = String(pageFromClientX(clientX));
+            progressTooltip.style.display = 'block';
+            progressTooltip.style.left = `${left}px`;
+        }
+
+        function showTooltipAt(clientX) {
+            updateTooltipPosition(clientX);
+        }
+
+        function hideTooltip() {
+            progressTooltip.style.display = 'none';
+        }
+
+        let isDragging = false;
+        progressBar.addEventListener('pointerenter', event => showTooltipAt(event.clientX));
+        progressBar.addEventListener('pointerleave', hideTooltip);
+        progressBar.addEventListener('pointermove', event => {
+            if (isDragging) {
+                applyPreview(pageFromClientX(event.clientX));
+                updateTooltipPosition(event.clientX);
+            } else if (progressTooltip.style.display !== 'none') {
+                updateTooltipPosition(event.clientX);
+            }
+        });
+        progressBar.addEventListener('pointerdown', event => {
+            isDragging = true;
+            progressBar.setPointerCapture(event.pointerId);
+            applyPreview(pageFromClientX(event.clientX));
+            showTooltipAt(event.clientX);
+        });
+        progressBar.addEventListener('pointerup', event => {
+            if (!isDragging) return;
+
+            isDragging = false;
+            progressBar.releasePointerCapture(event.pointerId);
+            const page = pageFromClientX(event.clientX);
+            commitNavigation(page);
+            hideTooltip();
+        });
 
         function updateProgress() {
             const select = document.querySelector('#single-page-select');
