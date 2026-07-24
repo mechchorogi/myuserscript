@@ -69,6 +69,7 @@
     const focusedBookClassName = 'hitomi-tweak-focused-book';
     const helpOverlayClassName = 'hitomi-tweak-help-overlay';
     const helpOverlayHiddenClassName = 'hitomi-tweak-help-overlay-hidden';
+    const shakeBlockedClassName = 'hitomi-tweak-shake-blocked';
     const filterPanelId = 'hitomi-tweak-filter-panel';
     const filterBookMap = new WeakMap();
     // Keep the help overlay generated from the same source as key handling so the
@@ -346,6 +347,16 @@
                 background-image: none !important;
                 border-radius: 3px;
                 text-decoration: line-through !important;
+            }
+
+            @keyframes hitomi-tweak-shake-blocked {
+                0%, 100% { transform: translateX(0); }
+                15%, 45%, 75% { transform: translateX(-7px); }
+                30%, 60%, 90% { transform: translateX(7px); }
+            }
+
+            .${shakeBlockedClassName} {
+                animation: hitomi-tweak-shake-blocked 0.4s ease;
             }
 
             .hitomi-switch {
@@ -691,6 +702,21 @@
         fold() {
             if (this.#isFolded()) return;
             this.#fold();
+        }
+
+        isBlocked() {
+            // Read the blacklist highlight from the DOM instead of a cached flag: Hitomi
+            // recycles card elements on lazy-load, so a fresh FilterBook instance can miss
+            // the last setFiltered() while the .hitomi-match class stays on the element.
+            return this.#isFolded() && Boolean(this.elem.querySelector('.hitomi-match'));
+        }
+
+        shake() {
+            this.elem.classList.remove(shakeBlockedClassName);
+            // Force a reflow so repeated v presses restart the animation.
+            void this.elem.offsetWidth;
+            this.elem.classList.add(shakeBlockedClassName);
+            this.elem.addEventListener('animationend', () => this.elem.classList.remove(shakeBlockedClassName), { once: true });
         }
 
         setManualFolded(state) {
@@ -3469,6 +3495,15 @@
 
         if (e.key === 'v') {
             if (isReaderPage()) return;
+            const focused = getFocusedBook();
+            if (focused) {
+                const filterBook = getFilterBook(focused);
+                if (filterBook.isBlocked()) {
+                    e.preventDefault();
+                    filterBook.shake();
+                    return;
+                }
+            }
             if (openFocusedBookInBackgroundTab()) {
                 e.preventDefault();
                 handleFocusNextBook();
