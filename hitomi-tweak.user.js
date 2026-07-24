@@ -1451,6 +1451,9 @@
     async function renderNameMapPage() {
         await loadNameMap();
 
+        let selectedIndex = -1;
+        const selectedRowClassName = 'hitomi-name-map-selected-row';
+
         document.title = 'Hitomi::Tweak Name Map';
         document.body.replaceChildren();
 
@@ -1560,6 +1563,12 @@
             .hitomi-name-map-table tr:last-child td {
                 border-bottom: 0;
             }
+            .hitomi-name-map-table tr.${selectedRowClassName} {
+                background: #ddf4ff;
+            }
+            .hitomi-name-map-table tr:hover {
+                background: #f6f8fa;
+            }
             .hitomi-name-map-search-link {
                 display: inline-flex;
                 align-items: center;
@@ -1668,10 +1677,32 @@
                 || entry.japanese.toLowerCase().includes(query));
         }
 
+        function applySelectionHighlight() {
+            tbody.querySelectorAll('tr').forEach((tr, index) => {
+                tr.classList.toggle(selectedRowClassName, index === selectedIndex);
+            });
+        }
+
+        function focusRow(index, { scrollIntoView = true } = {}) {
+            const entries = getFilteredEntries();
+            if (!entries.length) {
+                selectedIndex = -1;
+                return;
+            }
+
+            selectedIndex = Math.max(0, Math.min(entries.length - 1, index));
+            applySelectionHighlight();
+            if (scrollIntoView) tbody.children[selectedIndex]?.scrollIntoView({ block: 'nearest' });
+        }
+
         function renderTable() {
             const entries = getFilteredEntries();
-            tbody.replaceChildren(...entries.map(entry => {
+            tbody.replaceChildren(...entries.map((entry, index) => {
                 const tr = document.createElement('tr');
+                tr.classList.toggle(selectedRowClassName, index === selectedIndex);
+                tr.tabIndex = -1;
+                tr.addEventListener('click', () => focusRow(index));
+
                 const romajiTd = document.createElement('td');
                 const japaneseTd = document.createElement('td');
                 const kindTd = document.createElement('td');
@@ -1720,12 +1751,22 @@
                     if (nextValue === entry.japanese) return;
 
                     entry.japanese = nextValue;
+                    const nextEntry = entries[index + 1] || null;
                     await updateNameMap(map => {
                         map[entry.kind][entry.romaji] = nextValue;
                         return true;
                     });
                     setStatus(`Updated ${entry.romaji}. ${getNameMapEntryStatus()}`);
                     renderTable();
+
+                    if (nextEntry) {
+                        const newEntries = getFilteredEntries();
+                        const newIndex = newEntries.findIndex(candidate => candidate.kind === nextEntry.kind
+                            && candidate.romaji === nextEntry.romaji);
+                        if (newIndex !== -1) focusRow(newIndex);
+                    } else {
+                        focusRow(selectedIndex);
+                    }
                 });
 
                 deleteBtn.addEventListener('click', async () => {
@@ -1749,6 +1790,32 @@
                 td.textContent = 'No entries found.';
                 tr.appendChild(td);
                 tbody.appendChild(tr);
+            }
+
+            applySelectionHighlight();
+        }
+
+        function handleKeydown(event) {
+            if (isEditableTarget(event.target)
+                || event.ctrlKey
+                || event.metaKey
+                || event.altKey
+                || event.shiftKey) return;
+
+            if (event.key === 'j') {
+                event.preventDefault();
+                focusRow(selectedIndex + 1);
+            } else if (event.key === 'k') {
+                event.preventDefault();
+                const entries = getFilteredEntries();
+                focusRow(selectedIndex === -1 ? entries.length - 1 : selectedIndex - 1);
+            } else if (event.key === 'Enter') {
+                const input = tbody.children[selectedIndex]?.querySelector('.hitomi-name-map-japanese-input');
+                if (input) {
+                    event.preventDefault();
+                    input.focus();
+                    input.select();
+                }
             }
         }
 
@@ -1775,6 +1842,7 @@
             input.click();
         });
         searchInput.addEventListener('input', renderTable);
+        window.addEventListener('keydown', handleKeydown, true);
 
         addForm.addEventListener('submit', async event => {
             event.preventDefault();
