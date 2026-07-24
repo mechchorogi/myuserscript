@@ -93,6 +93,7 @@
     let helpOverlay = null;
     let activeBookPageDownload = null;
     let activeListDownloads = new Map();
+    let pendingListDownloads = [];
     let galleryInfoLoadQueue = Promise.resolve();
     let listDownloadNotice = null;
     let listDownloadProgressStack = null;
@@ -2712,22 +2713,8 @@
         }
     }
 
-    async function downloadFocusedBookFromList() {
-        const book = focusedBook;
-        if (!book) return false;
-
-        const galleryId = getBookIdFromElement(book);
-        if (!galleryId) return false;
-        if (activeListDownloads.has(galleryId)) {
-            cancelListDownload(activeListDownloads.get(galleryId));
-            return false;
-        }
-        if (activeListDownloads.size >= maxListDownloadCount) {
-            showListDownloadNotice(`Up to ${maxListDownloadCount} list downloads can run at once.`);
-            return false;
-        }
-
-        const downloadProgress = createBookDownloadProgress(book);
+    async function startListDownload(book, galleryId, existingProgress = null) {
+        const downloadProgress = existingProgress || createBookDownloadProgress(book);
         const downloadState = createListDownloadState(downloadProgress);
         activeListDownloads.set(galleryId, downloadState);
         updateListDownloadTitle();
@@ -2751,7 +2738,49 @@
         } finally {
             activeListDownloads.delete(galleryId);
             updateListDownloadTitle();
+            processListDownloadQueue();
         }
+    }
+
+    function processListDownloadQueue() {
+        while (activeListDownloads.size < maxListDownloadCount && pendingListDownloads.length) {
+            const next = pendingListDownloads.shift();
+            if (!next.book.isConnected) {
+                hideBookDownloadProgress(next.progress);
+                continue;
+            }
+            startListDownload(next.book, next.galleryId, next.progress);
+        }
+    }
+
+    function downloadFocusedBookFromList() {
+        const book = focusedBook;
+        if (!book) return;
+
+        const galleryId = getBookIdFromElement(book);
+        if (!galleryId) return;
+
+        if (activeListDownloads.has(galleryId)) {
+            cancelListDownload(activeListDownloads.get(galleryId));
+            return;
+        }
+
+        const pendingIndex = pendingListDownloads.findIndex(item => item.galleryId === galleryId);
+        if (pendingIndex !== -1) {
+            const [removed] = pendingListDownloads.splice(pendingIndex, 1);
+            hideBookDownloadProgress(removed.progress);
+            showListDownloadNotice('Removed from queue');
+            return;
+        }
+
+        if (activeListDownloads.size < maxListDownloadCount) {
+            startListDownload(book, galleryId);
+            return;
+        }
+
+        const progress = createBookDownloadProgress(book);
+        updateBookDownloadProgress(progress, 'Queued', 0);
+        pendingListDownloads.push({ galleryId, book, progress });
     }
 
     function getListDownloadProgressStack() {
