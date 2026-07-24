@@ -71,6 +71,7 @@
     const helpOverlayClassName = 'hitomi-tweak-help-overlay';
     const helpOverlayHiddenClassName = 'hitomi-tweak-help-overlay-hidden';
     const shakeBlockedClassName = 'hitomi-tweak-shake-blocked';
+    const blocklistModeActiveClassName = 'hitomi-tweak-blocklist-mode-active';
     const filterPanelId = 'hitomi-tweak-filter-panel';
     const filterBookMap = new WeakMap();
     // Keep the help overlay generated from the same source as key handling so the
@@ -393,6 +394,10 @@
 
             .${shakeBlockedClassName} {
                 animation: hitomi-tweak-shake-blocked 0.4s ease;
+            }
+
+            body.${blocklistModeActiveClassName} {
+                background: #ffd9d9 !important;
             }
 
             .hitomi-switch {
@@ -1301,6 +1306,7 @@
             const active = filterMarkModeButton.dataset.active === 'true';
             filterMarkModeButton.dataset.active = String(!active);
             filterMarkModeButton.style.background = !active ? '#ffcccc' : '';
+            document.body.classList.toggle(blocklistModeActiveClassName, !active);
             if (!active) {
                 document.body.addEventListener('click', blacklistClickHandler, true);
             } else {
