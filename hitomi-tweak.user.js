@@ -943,46 +943,108 @@
         });
     }
 
+    function highlightBookPageBlacklistMatches(blackList) {
+        // The main book page's own metadata panel isn't a gallery-content card, so
+        // filter()/clearFilter() never touch it; strike through matches here instead.
+        const gallery = document.querySelector('div.gallery.dj-gallery');
+        if (!gallery) return;
+
+        gallery.querySelectorAll('.hitomi-match').forEach(el => el.classList.remove('hitomi-match'));
+
+        gallery.querySelectorAll('a').forEach(link => {
+            const key = getBlacklistKeyFromLink(link);
+            if (!key || key === 'title') return;
+
+            const value = link.textContent.trim().toLowerCase();
+            if (blackList[key].some(x => x.toLowerCase() === value)) {
+                link.classList.add('hitomi-match');
+                link.closest('li')?.classList.add('hitomi-match');
+            }
+        });
+
+        const titleHeading = gallery.querySelector('h1#gallery-brand');
+        const titleText = titleHeading?.querySelector('a')?.textContent.trim();
+        if (titleHeading && titleText) {
+            const titleMatched = blackList.title.some(x => {
+                try {
+                    return new RegExp(x, 'i').test(titleText);
+                } catch (e) {
+                    return false;
+                }
+            });
+            titleHeading.classList.toggle('hitomi-match', titleMatched);
+        }
+    }
+
+    function clearBookPageBlacklistHighlights() {
+        document.querySelector('div.gallery.dj-gallery')?.querySelectorAll('.hitomi-match').forEach(el => {
+            el.classList.remove('hitomi-match');
+        });
+    }
+
     function refreshFilter(blackList) {
         clearFilter();
         filter(blackList);
+        if (filterEnabled) {
+            highlightBookPageBlacklistMatches(blackList);
+        } else {
+            clearBookPageBlacklistHighlights();
+        }
+    }
+
+    function getBlacklistKeyFromLink(link) {
+        // Both list cards and book pages link fields to the same category pages, so
+        // classify by href instead of page-specific markup (list-card classes like
+        // div.artist-list don't exist on book pages, and vice versa).
+        const href = link.getAttribute('href') || '';
+        const hrefPatterns = [
+            [/^\/artist\//, 'author'],
+            [/^\/tag\//, 'tag'],
+            [/^\/series\//, 'series'],
+            [/^\/type\//, 'type'],
+            [/^\/index-/, 'language']
+        ];
+        for (const [pattern, key] of hrefPatterns) {
+            if (pattern.test(href)) return key;
+        }
+
+        // Title has no dedicated category URL, so match it by the heading classes
+        // list cards (h1.lillie) and book pages (h1#gallery-brand) each use.
+        if (link.matches('h1.lillie a, h1#gallery-brand a')) return 'title';
+
+        return null;
     }
 
     async function blacklistClickHandler(e) {
         if (e.target.closest(`#${filterPanelId}`)) return;
 
         const link = e.target.closest('a');
-        if (link) {
-            e.preventDefault();
-            e.stopPropagation();
-        }
+        if (!link) return;
 
-        const elem = e.target;
-        const map = [
-            { selector: 'div.artist-list li a', key: 'author' },
-            { selector: 'td.relatedtags li a', key: 'tag' },
-            { selector: 'table.dj-desc tr:nth-of-type(1) td:nth-of-type(2) li a', key: 'series' },
-            { selector: 'table.dj-desc tr:nth-of-type(2) td:nth-of-type(2) a', key: 'type' },
-            { selector: 'table.dj-desc tr:nth-of-type(3) td:nth-of-type(2) a', key: 'language' },
-            { selector: 'h1.lillie a', key: 'title' }
-        ];
+        // Suppress every link click while the mode is active, matching the existing
+        // "clicking anywhere should not navigate away" behavior, even for links this
+        // handler will not blacklist.
+        e.preventDefault();
+        e.stopPropagation();
 
-        for (const { selector, key } of map) {
-            if (elem.matches(selector)) {
-                const value = elem.textContent.trim();
-                const current = await GM.getValue(blacklistStorageKey(key), '');
-                const lines = new Set(current.split('\n').map(l => l.trim()).filter(Boolean));
-                lines.add(value);
-                await GM.setValue(blacklistStorageKey(key), [...lines].join('\n'));
+        // Book pages embed other books' fields in a "related galleries" widget;
+        // skip it so clicks only ever blacklist values from the book being viewed.
+        if (e.target.closest('#related-content')) return;
 
-                const input = document.querySelector(`#blacklist-input-${key}`);
-                if (input) input.value = [...lines].join('\n');
+        const key = getBlacklistKeyFromLink(link);
+        if (!key) return;
 
-                const blackList = await loadBlacklist();
-                refreshFilter(blackList);
-                break;
-            }
-        }
+        const value = link.textContent.trim();
+        const current = await GM.getValue(blacklistStorageKey(key), '');
+        const lines = new Set(current.split('\n').map(l => l.trim()).filter(Boolean));
+        lines.add(value);
+        await GM.setValue(blacklistStorageKey(key), [...lines].join('\n'));
+
+        const input = document.querySelector(`#blacklist-input-${key}`);
+        if (input) input.value = [...lines].join('\n');
+
+        const blackList = await loadBlacklist();
+        refreshFilter(blackList);
     }
 
     async function createFilterUI() {
@@ -1340,11 +1402,28 @@
         }
     }
 
+    async function waitForBookPageGallery() {
+        // The book page's metadata panel can still be streaming in via the site's
+        // own document.write-based gallery script when this runs, so poll briefly
+        // instead of giving up on the first miss (mirrors loadCurrentBookPageGalleryInfo).
+        for (let i = 0; i < 50; i++) {
+            if (document.querySelector('div.gallery.dj-gallery')) return true;
+            await new Promise(resolve => window.setTimeout(resolve, 100));
+        }
+        return false;
+    }
+
     async function installFilter() {
         await loadFoldedBookIds();
         await createFilterUI();
         const blackList = await loadBlacklist();
         observeGallery(blackList);
+        // observeGallery only paints once div.gallery-content (the related-galleries
+        // widget) exists; a book page without related galleries never gets that far,
+        // so highlight the book's own fields unconditionally here too.
+        if (filterEnabled && await waitForBookPageGallery()) {
+            highlightBookPageBlacklistMatches(blackList);
+        }
     }
 
     async function renderNameMapPage() {
