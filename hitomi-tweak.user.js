@@ -41,6 +41,7 @@
     const unifiedDownloadsLockName = 'hitomi-tweak-downloads-lock';
     const foldedBookIdsKey = 'hitomi-tweak-folded-book-ids';
     const nameMapKey = 'hitomi-tweak-name-map';
+    const nameMapLockName = 'hitomi-tweak-name-map-lock';
     const nameMapPagePath = '/hitomi-tweak-name-map.html';
     const downloadPagePath = '/hitomi-tweak-download.html';
     const preferredLanguageKey = 'hitomi-tweak-preferred-language';
@@ -99,6 +100,7 @@
     let listDownloadNotice = null;
     let listDownloadProgressStack = null;
     let nameMap = { version: 1, group: {}, author: {}, series: {} };
+    let nameMapWriteQueue = Promise.resolve();
     let titleBeforeListDownloads = null;
     let unifiedDownloadsWriteQueue = Promise.resolve();
 
@@ -226,6 +228,30 @@
         await GM.setValue(nameMapKey, nameMap);
     }
 
+    async function withNameMapLock(task) {
+        if (navigator.locks?.request) {
+            return navigator.locks.request(nameMapLockName, async () => task());
+        }
+
+        // Keep name-map writes ordered in this tab when Web Locks are unavailable.
+        const next = nameMapWriteQueue.then(task, task);
+        nameMapWriteQueue = next.catch(() => {});
+        return next;
+    }
+
+    async function updateNameMap(mutator) {
+        return withNameMapLock(async () => {
+            const fresh = normalizeNameMap(await GM.getValue(nameMapKey, loadLocalNameMap()));
+            const before = JSON.stringify(fresh);
+            const result = await mutator(fresh);
+
+            if (JSON.stringify(fresh) !== before) {
+                await saveNameMap(fresh);
+            }
+            return result;
+        });
+    }
+
     function resolveJapaneseName(name, kind) {
         const normalized = normalizeNameMapKey(name);
         return (kind === 'group' || kind === 'author' || kind === 'series') && normalized ? nameMap[kind]?.[normalized] || name : name;
@@ -234,11 +260,21 @@
     function getNameMapEntries(map = nameMap) {
         return ['group', 'author', 'series']
             .flatMap(kind => Object.entries(map[kind] || {}).map(([romaji, japanese]) => ({ kind, romaji, japanese })))
-            .sort((a, b) => a.romaji.localeCompare(b.romaji, undefined, { numeric: true, sensitivity: 'base' }) || a.kind.localeCompare(b.kind));
+            .sort((a, b) => {
+                const aUnfilled = a.japanese === '';
+                const bUnfilled = b.japanese === '';
+                if (aUnfilled !== bUnfilled) return aUnfilled ? -1 : 1;
+                return a.romaji.localeCompare(b.romaji, undefined, { numeric: true, sensitivity: 'base' }) || a.kind.localeCompare(b.kind);
+            });
     }
 
     function countNameMapEntries(map = nameMap) {
         return getNameMapEntries(map).length;
+    }
+
+    function getNameMapEntryStatus(map = nameMap) {
+        const entries = getNameMapEntries(map);
+        return `${entries.length} entries, ${entries.filter(entry => !entry.japanese).length} unfilled`;
     }
 
     function normalizePreferredLanguage(value) {
@@ -1462,7 +1498,7 @@
         table.className = 'hitomi-name-map-table';
 
         title.textContent = 'Name Map';
-        status.textContent = `${countNameMapEntries()} entries`;
+        status.textContent = getNameMapEntryStatus();
         notice.textContent = 'Imports replace the entire map. Manual edits here are lost on the next external dictionary import, so keep permanent fixes in the external dictionary too.';
 
         searchInput.type = 'search';
@@ -1522,7 +1558,12 @@
                 const actionTd = document.createElement('td');
                 const deleteBtn = document.createElement('button');
 
-                romajiTd.textContent = entry.romaji;
+                const romajiLink = document.createElement('a');
+                romajiLink.href = `https://www.google.com/search?q=${encodeURIComponent(entry.romaji)}`;
+                romajiLink.target = '_blank';
+                romajiLink.rel = 'noopener noreferrer';
+                romajiLink.textContent = entry.romaji;
+                romajiTd.appendChild(romajiLink);
                 japaneseTd.textContent = entry.japanese;
                 japaneseTd.className = 'hitomi-name-map-editable';
                 japaneseTd.title = 'Click to edit';
@@ -1542,6 +1583,7 @@
                     input.select();
 
                     input.addEventListener('keydown', event => {
+                        if (event.isComposing) return;
                         if (event.key === 'Enter') {
                             event.preventDefault();
                             input.blur();
@@ -1562,20 +1604,22 @@
                         }
 
                         if (nextValue !== entry.japanese) {
-                            const nextMap = normalizeNameMap(nameMap);
-                            nextMap[entry.kind][entry.romaji] = nextValue;
-                            await saveNameMap(nextMap);
-                            setStatus(`Updated ${entry.romaji}`);
+                            await updateNameMap(map => {
+                                map[entry.kind][entry.romaji] = nextValue;
+                                return true;
+                            });
+                            setStatus(`Updated ${entry.romaji}. ${getNameMapEntryStatus()}`);
                         }
                         renderTable();
                     }, { once: true });
                 });
 
                 deleteBtn.addEventListener('click', async () => {
-                    const nextMap = normalizeNameMap(nameMap);
-                    delete nextMap[entry.kind][entry.romaji];
-                    await saveNameMap(nextMap);
-                    setStatus(`Deleted ${entry.romaji}. ${countNameMapEntries()} entries`);
+                    await updateNameMap(map => {
+                        delete map[entry.kind][entry.romaji];
+                        return true;
+                    });
+                    setStatus(`Deleted ${entry.romaji}. ${getNameMapEntryStatus()}`);
                     renderTable();
                 });
 
@@ -1607,7 +1651,8 @@
                     const imported = normalizeNameMap(JSON.parse(await input.files[0].text()));
                     await saveNameMap(imported);
                     const afterCount = countNameMapEntries();
-                    setStatus(`${beforeCount} -> ${afterCount} entries`);
+                    const unfilledCount = getNameMapEntries().filter(entry => !entry.japanese).length;
+                    setStatus(`${beforeCount} -> ${afterCount} entries, ${unfilledCount} unfilled`);
                     renderTable();
                 } catch (e) {
                     setStatus('Invalid name map format.');
@@ -1628,13 +1673,15 @@
                 return;
             }
 
-            const nextMap = normalizeNameMap(nameMap);
-            const existed = Object.prototype.hasOwnProperty.call(nextMap[kind], romaji);
-            nextMap[kind][romaji] = japanese;
-            await saveNameMap(nextMap);
+            let existed = false;
+            await updateNameMap(map => {
+                existed = Object.prototype.hasOwnProperty.call(map[kind], romaji);
+                map[kind][romaji] = japanese;
+                return true;
+            });
             romajiInput.value = '';
             japaneseInput.value = '';
-            setStatus(`${existed ? 'Updated' : 'Added'} ${romaji}. ${countNameMapEntries()} entries`);
+            setStatus(`${existed ? 'Updated' : 'Added'} ${romaji}. ${getNameMapEntryStatus()}`);
             renderTable();
         });
 
@@ -2454,6 +2501,29 @@
             .filter(Boolean);
     }
 
+    function harvestNameMapKeys(galleryInfo) {
+        if (!galleryInfo) return Promise.resolve();
+
+        return updateNameMap(map => {
+            let changed = false;
+            for (const [values, kind] of [
+                [galleryInfo.groups, 'group'],
+                [galleryInfo.artists, 'author'],
+                [galleryInfo.parodys, 'series']
+            ]) {
+                const infoKey = kind === 'author' ? 'artist' : kind === 'series' ? 'parody' : 'group';
+                for (const raw of getGalleryInfoNames(values, infoKey)) {
+                    const key = normalizeNameMapKey(raw);
+                    if (key && !(key in map[kind])) {
+                        map[kind][key] = '';
+                        changed = true;
+                    }
+                }
+            }
+            return changed;
+        });
+    }
+
     function getBookPageTitle(root, galleryInfo, galleryId) {
         // Prefer ID-verified galleryinfo so stale SPA DOM or neighboring list cards cannot leak metadata.
         // The DOM remains a fallback for pages where galleryinfo is not available yet.
@@ -2660,6 +2730,18 @@
         }
     }
 
+    async function harvestCurrentBookPage() {
+        const galleryId = getCurrentGalleryId();
+        if (!galleryId) return;
+
+        try {
+            const galleryInfo = await loadCurrentBookPageGalleryInfo(galleryId);
+            await harvestNameMapKeys(galleryInfo);
+        } catch (e) {
+            // Name-map harvesting is best-effort and must not affect page setup.
+        }
+    }
+
     function createBookPageDownloadState(previousText = getDLButtonText()) {
         // Book-page downloads use Hitomi's original progressbar UI, but the transfer
         // itself is ours so pressing d again can cancel XHR/throttle waits safely.
@@ -2697,6 +2779,7 @@
                 : loadGalleryInfo(galleryId)
         ]);
         throwIfDownloadCanceled(downloadState);
+        harvestNameMapKeys(galleryInfo).catch(() => {});
 
         if (galleryInfo.type === 'anime') {
             throw createAnimeNotSupportedError();
@@ -3211,6 +3294,7 @@
 
     function installHistory() {
         markPageIfDownloaded().catch(() => {});
+        harvestCurrentBookPage().catch(() => {});
         installDownloadClickHistory();
     }
 
