@@ -153,6 +153,8 @@
         const link = document.createElement('a');
         link.className = 'hitomi-tweak-download-nav-link';
         link.href = new URL(downloadPagePath, location.origin).href;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
         link.textContent = 'DOWNLOADS';
         li.appendChild(link);
         navList.appendChild(li);
@@ -1170,6 +1172,8 @@
         const nameMapEditLink = document.createElement('a');
 
         nameMapEditLink.href = nameMapPagePath;
+        nameMapEditLink.target = '_blank';
+        nameMapEditLink.rel = 'noopener noreferrer';
         nameMapEditLink.textContent = 'Edit';
         Object.assign(nameMapEditLink.style, {
             fontWeight: 'normal'
