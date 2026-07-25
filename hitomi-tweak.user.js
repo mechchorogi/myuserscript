@@ -972,7 +972,7 @@
     function highlightBookPageBlacklistMatches(blackList) {
         // The main book page's own metadata panel isn't a gallery-content card, so
         // filter()/clearFilter() never touch it; strike through matches here instead.
-        const gallery = document.querySelector('div.gallery.dj-gallery');
+        const gallery = document.querySelector('div.gallery');
         if (!gallery) return;
 
         gallery.querySelectorAll('.hitomi-match').forEach(el => el.classList.remove('hitomi-match'));
@@ -1003,7 +1003,7 @@
     }
 
     function clearBookPageBlacklistHighlights() {
-        document.querySelector('div.gallery.dj-gallery')?.querySelectorAll('.hitomi-match').forEach(el => {
+        document.querySelector('div.gallery')?.querySelectorAll('.hitomi-match').forEach(el => {
             el.classList.remove('hitomi-match');
         });
     }
@@ -1462,11 +1462,13 @@
     }
 
     async function waitForBookPageGallery() {
-        // The book page's metadata panel can still be streaming in via the site's
-        // own document.write-based gallery script when this runs, so poll briefly
-        // instead of giving up on the first miss (mirrors loadCurrentBookPageGalleryInfo).
+        // div.gallery itself, and even verified galleryinfo, can be present before the
+        // site's own rendering finishes populating the actual author/group/series link
+        // markup inside the container, so wait for at least one such link directly
+        // rather than a proxy signal.
         for (let i = 0; i < 50; i++) {
-            if (document.querySelector('div.gallery.dj-gallery')) return true;
+            const gallery = document.querySelector('div.gallery');
+            if (gallery && gallery.querySelector('a[href^="/artist/"], a[href^="/group/"], a[href^="/series/"]')) return true;
             await new Promise(resolve => window.setTimeout(resolve, 100));
         }
         return false;
@@ -1482,7 +1484,7 @@
         // so highlight the book's own fields unconditionally here too.
         if (await waitForBookPageGallery()) {
             if (filterEnabled) highlightBookPageBlacklistMatches(blackList);
-            annotateNameMapLinks(document.querySelector('div.gallery.dj-gallery'));
+            annotateNameMapLinks(document.querySelector('div.gallery'));
         }
     }
 
