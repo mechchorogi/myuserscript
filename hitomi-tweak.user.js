@@ -1489,9 +1489,30 @@
     async function renderNameMapPage() {
         await loadNameMap();
         const blackList = await loadBlacklist();
+        const unifiedModel = await loadUnifiedStoreOnly();
+        const groupDownloadCounts = new Map();
+        const authorDownloadCounts = new Map();
+        for (const item of unifiedModel.items) {
+            if (item.status !== 'done' && !item.downloadedAt) continue;
+            for (const [rawValue, countMap] of [[item.group, groupDownloadCounts], [item.author, authorDownloadCounts]]) {
+                for (const token of String(rawValue || '').split(',')) {
+                    const key = normalizeNameMapKey(token);
+                    if (!key) continue;
+                    countMap.set(key, (countMap.get(key) || 0) + 1);
+                }
+            }
+        }
 
         let selectedIndex = -1;
         const selectedRowClassName = 'hitomi-name-map-selected-row';
+        const sortIndicatorClassName = 'hitomi-name-map-sort-indicator';
+        const columns = [
+            { key: 'romaji', label: 'romaji' },
+            { key: 'japanese', label: 'Japanese name' },
+            { key: 'kind', label: 'kind' },
+            { key: 'downloads', label: 'downloads' }
+        ];
+        let sortState = { key: 'unfilled', direction: 'asc' };
 
         document.title = 'Hitomi::Tweak Name Map';
         document.body.replaceChildren();
@@ -1636,6 +1657,13 @@
                 border-color: #0969da;
                 outline: none;
             }
+            .hitomi-name-map-downloads-cell {
+                text-align: right;
+            }
+            .${sortIndicatorClassName} {
+                margin-left: 4px;
+                font-size: 11px;
+            }
         `;
         document.head.appendChild(style);
 
@@ -1658,6 +1686,7 @@
         const thead = document.createElement('thead');
         const tbody = document.createElement('tbody');
         const headerRow = document.createElement('tr');
+        const headerElems = new Map();
 
         page.className = 'hitomi-name-map-page';
         header.className = 'hitomi-name-map-header';
@@ -1692,11 +1721,19 @@
             kindSelect.appendChild(option);
         }
 
-        ['romaji', 'Japanese name', 'kind', ''].forEach(label => {
+        columns.forEach(column => {
             const th = document.createElement('th');
-            th.textContent = label;
+            const indicator = document.createElement('span');
+
+            th.textContent = column.label;
+            indicator.className = sortIndicatorClassName;
+            th.appendChild(indicator);
+            th.style.cursor = 'pointer';
+            th.addEventListener('click', () => setSort(column.key));
+            headerElems.set(column.key, th);
             headerRow.appendChild(th);
         });
+        headerRow.appendChild(document.createElement('th'));
 
         function setStatus(text) {
             status.textContent = text;
@@ -1712,11 +1749,63 @@
             URL.revokeObjectURL(url);
         }
 
+        function getDownloadCount(entry) {
+            if (entry.kind === 'series') return 0;
+            const countMap = entry.kind === 'group' ? groupDownloadCounts : authorDownloadCounts;
+            const romajiKey = entry.romaji;
+            const japaneseKey = normalizeNameMapKey(entry.japanese);
+            return (countMap.get(romajiKey) || 0)
+                + (japaneseKey && japaneseKey !== romajiKey ? (countMap.get(japaneseKey) || 0) : 0);
+        }
+
+        function compareEntries(a, b) {
+            const direction = sortState.direction === 'asc' ? 1 : -1;
+            if (sortState.key === 'unfilled') {
+                const aUnfilled = a.japanese === '';
+                const bUnfilled = b.japanese === '';
+                if (aUnfilled !== bUnfilled) return (aUnfilled ? -1 : 1) * direction;
+                return a.romaji.localeCompare(b.romaji, undefined, { numeric: true, sensitivity: 'base' }) * direction;
+            }
+            if (sortState.key === 'downloads') {
+                const aIsSeries = a.kind === 'series';
+                const bIsSeries = b.kind === 'series';
+                if (aIsSeries !== bIsSeries) return aIsSeries ? 1 : -1;
+                return (getDownloadCount(a) - getDownloadCount(b)) * direction;
+            }
+            const aValue = String(a[sortState.key] || '');
+            const bValue = String(b[sortState.key] || '');
+            return aValue.localeCompare(bValue, undefined, { numeric: true, sensitivity: 'base' }) * direction;
+        }
+
         function getFilteredEntries() {
             const query = searchInput.value.trim().toLowerCase();
             return getNameMapEntries().filter(entry => !query
                 || entry.romaji.toLowerCase().includes(query)
-                || entry.japanese.toLowerCase().includes(query));
+                || entry.japanese.toLowerCase().includes(query))
+                .sort(compareEntries);
+        }
+
+        function renderHeaders() {
+            headerElems.forEach((heading, key) => {
+                const indicator = heading.querySelector(`.${sortIndicatorClassName}`);
+                if (!indicator) return;
+                indicator.textContent = sortState.key === key ? (sortState.direction === 'asc' ? '▲' : '▼') : '';
+            });
+        }
+
+        function setSort(key) {
+            const selectedEntry = selectedIndex >= 0 ? getFilteredEntries()[selectedIndex] : null;
+            if (sortState.key === key) {
+                sortState.direction = sortState.direction === 'asc' ? 'desc' : 'asc';
+            } else {
+                sortState = { key, direction: 'asc' };
+            }
+            renderTable();
+            if (selectedEntry) {
+                const newIndex = getFilteredEntries().findIndex(entry => entry.kind === selectedEntry.kind
+                    && entry.romaji === selectedEntry.romaji);
+                if (newIndex !== -1) focusRow(newIndex, { scrollIntoView: false });
+            }
         }
 
         function applySelectionHighlight() {
@@ -1748,6 +1837,7 @@
                 const romajiTd = document.createElement('td');
                 const japaneseTd = document.createElement('td');
                 const kindTd = document.createElement('td');
+                const downloadsTd = document.createElement('td');
                 const actionTd = document.createElement('td');
                 const deleteBtn = document.createElement('button');
 
@@ -1779,6 +1869,8 @@
                 japaneseInput.placeholder = '';
                 japaneseTd.appendChild(japaneseInput);
                 kindTd.textContent = entry.kind;
+                downloadsTd.textContent = entry.kind === 'series' ? '-' : String(getDownloadCount(entry));
+                downloadsTd.className = 'hitomi-name-map-downloads-cell';
                 deleteBtn.type = 'button';
                 deleteBtn.textContent = 'Delete';
 
@@ -1826,20 +1918,21 @@
                 });
 
                 actionTd.appendChild(deleteBtn);
-                tr.append(romajiTd, japaneseTd, kindTd, actionTd);
+                tr.append(romajiTd, japaneseTd, kindTd, downloadsTd, actionTd);
                 return tr;
             }));
 
             if (!entries.length) {
                 const tr = document.createElement('tr');
                 const td = document.createElement('td');
-                td.colSpan = 4;
+                td.colSpan = 5;
                 td.textContent = 'No entries found.';
                 tr.appendChild(td);
                 tbody.appendChild(tr);
             }
 
             applySelectionHighlight();
+            renderHeaders();
         }
 
         function handleKeydown(event) {
