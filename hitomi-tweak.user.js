@@ -1450,6 +1450,7 @@
 
     async function renderNameMapPage() {
         await loadNameMap();
+        const blackList = await loadBlacklist();
 
         let selectedIndex = -1;
         const selectedRowClassName = 'hitomi-name-map-selected-row';
@@ -1568,6 +1569,9 @@
             }
             .hitomi-name-map-table tr:hover {
                 background: #f6f8fa;
+            }
+            .hitomi-match {
+                text-decoration: line-through;
             }
             .hitomi-name-map-search-link {
                 display: inline-flex;
@@ -1715,6 +1719,11 @@
                 romajiLink.target = '_blank';
                 romajiLink.rel = 'noopener noreferrer';
                 romajiLink.textContent = entry.romaji;
+                // The blacklist has no "group" category, so only author/series entries can match.
+                const blacklistValues = blackList[entry.kind] || [];
+                if (blacklistValues.some(value => value.toLowerCase() === entry.romaji)) {
+                    romajiLink.classList.add('hitomi-match');
+                }
 
                 const searchLink = document.createElement('a');
                 searchLink.href = `https://www.google.com/search?q=${encodeURIComponent(entry.romaji)}`;
