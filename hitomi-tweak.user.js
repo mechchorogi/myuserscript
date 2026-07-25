@@ -1051,10 +1051,12 @@
     }
 
     function annotateNameMapLinks(root) {
+        // Unlike blacklist matching/highlighting, this only rewrites a link's own label
+        // based on its own href+text, so it is safe to also annotate the "related
+        // galleries" widget on book pages (other books' links, not excluded here).
         if (!root) return;
         root.querySelectorAll('a[href]').forEach(link => {
             if (link.dataset.hitomiNameMapAnnotated) return;
-            if (link.closest('#related-content')) return;
 
             const kind = getNameMapKindFromLink(link);
             if (!kind) return;
