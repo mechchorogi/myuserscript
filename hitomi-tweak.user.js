@@ -824,7 +824,10 @@
         }
 
         #getList(selector, filter) {
-            const values = Array.from(this.elem.querySelectorAll(selector), item => item.textContent);
+            const values = Array.from(this.elem.querySelectorAll(selector), item => {
+                const link = item.querySelector('a');
+                return link?.dataset.hitomiNameMapOriginal || item.textContent;
+            });
             return filter ? values.filter(filter) : values;
         }
 
@@ -865,7 +868,8 @@
         #highlightLinks(selector, matchedValues) {
             const lowerMatchedValues = matchedValues.map(v => v.toLowerCase());
             for (const a of this.elem.querySelectorAll(selector)) {
-                if (lowerMatchedValues.includes(a.textContent.trim().toLowerCase())) {
+                const text = a.dataset.hitomiNameMapOriginal || a.textContent.trim();
+                if (lowerMatchedValues.includes(text.toLowerCase())) {
                     a.classList.add('hitomi-match');
                     a.closest('li')?.classList.add('hitomi-match');
                 }
@@ -977,7 +981,7 @@
             const key = getBlacklistKeyFromLink(link);
             if (!key || key === 'title') return;
 
-            const value = link.textContent.trim().toLowerCase();
+            const value = (link.dataset.hitomiNameMapOriginal || link.textContent.trim()).toLowerCase();
             if (blackList[key].some(x => x.toLowerCase() === value)) {
                 link.classList.add('hitomi-match');
                 link.closest('li')?.classList.add('hitomi-match');
@@ -1037,6 +1041,37 @@
         return null;
     }
 
+    function getNameMapKindFromLink(link) {
+        const href = link.getAttribute('href') || '';
+        const hrefPatterns = [[/^\/artist\//, 'author'], [/^\/group\//, 'group'], [/^\/series\//, 'series']];
+        for (const [pattern, kind] of hrefPatterns) {
+            if (pattern.test(href)) return kind;
+        }
+        return null;
+    }
+
+    function annotateNameMapLinks(root) {
+        if (!root) return;
+        root.querySelectorAll('a[href]').forEach(link => {
+            if (link.dataset.hitomiNameMapAnnotated) return;
+            if (link.closest('#related-content')) return;
+
+            const kind = getNameMapKindFromLink(link);
+            if (!kind) return;
+
+            const romajiText = normalizeMetadataText(link.textContent);
+            const romaji = normalizeNameMapKey(romajiText);
+            const japanese = nameMap[kind]?.[romaji];
+
+            link.dataset.hitomiNameMapAnnotated = '1';
+            // Preserve the canonical romaji for metadata readers after changing the visible label.
+            link.dataset.hitomiNameMapOriginal = romajiText;
+            if (!japanese) return;
+
+            link.textContent = japanese;
+        });
+    }
+
     async function blacklistClickHandler(e) {
         if (e.target.closest(`#${filterPanelId}`)) return;
 
@@ -1056,7 +1091,7 @@
         const key = getBlacklistKeyFromLink(link);
         if (!key) return;
 
-        const value = link.textContent.trim();
+        const value = link.dataset.hitomiNameMapOriginal || link.textContent.trim();
         const current = await GM.getValue(blacklistStorageKey(key), '');
         const lines = new Set(current.split('\n').map(l => l.trim()).filter(Boolean));
         lines.add(value);
@@ -1412,6 +1447,7 @@
             if (hasContent) {
                 const currentBlackList = await loadBlacklist();
                 filter(currentBlackList);
+                annotateNameMapLinks(gallery);
                 refreshDownloadIndicators().catch(() => {});
             }
         });
@@ -1420,6 +1456,7 @@
         const hasContent = Array.from(gallery.children).some(c => c.id !== 'loader-content');
         if (hasContent) {
             filter(blackList);
+            annotateNameMapLinks(gallery);
             refreshDownloadIndicators().catch(() => {});
         }
     }
@@ -1443,8 +1480,9 @@
         // observeGallery only paints once div.gallery-content (the related-galleries
         // widget) exists; a book page without related galleries never gets that far,
         // so highlight the book's own fields unconditionally here too.
-        if (filterEnabled && await waitForBookPageGallery()) {
-            highlightBookPageBlacklistMatches(blackList);
+        if (await waitForBookPageGallery()) {
+            if (filterEnabled) highlightBookPageBlacklistMatches(blackList);
+            annotateNameMapLinks(document.querySelector('div.gallery.dj-gallery'));
         }
     }
 
@@ -2679,7 +2717,7 @@
     }
 
     function getMetadataListText(root, headingSelector) {
-        return normalizeMetadataText(Array.from(root.querySelectorAll(`${headingSelector} a`), link => link.textContent.trim())
+        return normalizeMetadataText(Array.from(root.querySelectorAll(`${headingSelector} a`), link => link.dataset.hitomiNameMapOriginal || link.textContent.trim())
             .filter(Boolean)
             .join(', ') || root.querySelector(headingSelector)?.textContent);
     }
@@ -2724,6 +2762,12 @@
             || `hitomi-${galleryId}`;
     }
 
+    function getCellDisplayText(cell) {
+        const links = Array.from(cell?.querySelectorAll('a') || []);
+        if (links.length) return links.map(link => link.dataset.hitomiNameMapOriginal || link.textContent).join(', ');
+        return cell?.textContent;
+    }
+
     function getBookPageGroup(root, galleryInfo) {
         // Prefer ID-verified galleryinfo; inspect the DOM only when the canonical metadata is missing.
         const infoGroups = getGalleryInfoNames(galleryInfo?.groups, 'group');
@@ -2733,7 +2777,7 @@
         for (const row of tableRows) {
             const cells = Array.from(row.children);
             if (normalizeMetadataText(cells[0]?.textContent).toLowerCase() === 'group') {
-                const group = normalizeMetadataText(cells[1]?.textContent);
+                const group = normalizeMetadataText(getCellDisplayText(cells[1]));
                 if (!isMissingMetadataValue(group)) return resolveJapaneseName(group, 'group');
             }
         }
@@ -2741,7 +2785,7 @@
         const labels = Array.from(root.querySelectorAll('dt, th, td, h2, h3, strong, b'));
         const groupLabel = labels.find(label => normalizeMetadataText(label.textContent).toLowerCase() === 'group');
         if (groupLabel) {
-            const group = normalizeMetadataText(groupLabel.nextElementSibling?.textContent);
+            const group = normalizeMetadataText(getCellDisplayText(groupLabel.nextElementSibling));
             if (!isMissingMetadataValue(group)) return resolveJapaneseName(group, 'group');
         }
 
@@ -2769,7 +2813,7 @@
         for (const row of tableRows) {
             const cells = Array.from(row.children);
             if (normalizeMetadataText(cells[0]?.textContent).toLowerCase() === 'series') {
-                const series = normalizeMetadataText(cells[1]?.textContent);
+                const series = normalizeMetadataText(getCellDisplayText(cells[1]));
                 if (!isMissingMetadataValue(series)) return resolveJapaneseName(series, 'series');
             }
         }
@@ -2777,7 +2821,7 @@
         const labels = Array.from(root.querySelectorAll('dt, th, td, h2, h3, strong, b'));
         const seriesLabel = labels.find(label => normalizeMetadataText(label.textContent).toLowerCase() === 'series');
         if (seriesLabel) {
-            const series = normalizeMetadataText(seriesLabel.nextElementSibling?.textContent);
+            const series = normalizeMetadataText(getCellDisplayText(seriesLabel.nextElementSibling));
             if (!isMissingMetadataValue(series)) return resolveJapaneseName(series, 'series');
         }
 
