@@ -3119,7 +3119,6 @@
 
         const zip = new JSZip();
         const metadataRoot = String(getCurrentGalleryId()) === galleryId ? document : document.createElement('div');
-        const title = getDownloadFileNameFromBookPageDocument(metadataRoot, galleryInfo, galleryId);
 
         for (let i = 0; i < galleryInfo.files.length; i++) {
             const image = galleryInfo.files[i];
@@ -3132,6 +3131,10 @@
         }
 
         throwIfDownloadCanceled(downloadState);
+        // Refresh the name map right before naming the file so a Japanese name registered
+        // (possibly from another tab) while the images were downloading is still picked up.
+        await loadNameMap().catch(() => {});
+        const title = getDownloadFileNameFromBookPageDocument(metadataRoot, galleryInfo, galleryId);
         onProgress('Zipping...', 100);
         const zipBlob = await zip.generateAsync({ type: 'blob' });
         throwIfDownloadCanceled(downloadState);
