@@ -3748,6 +3748,7 @@
         if (!bookId) return false;
 
         openUrlInNewTab(new URL(`/reader/${bookId}.html`, location.href).href);
+        loadGalleryInfo(bookId).then(harvestNameMapKeys).catch(() => {});
         return true;
     }
 
@@ -3756,6 +3757,7 @@
         if (!readOnlineButton) return false;
 
         readOnlineButton.click();
+        harvestCurrentBookPage().catch(() => {});
         return true;
     }
 
