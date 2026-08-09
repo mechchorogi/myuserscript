@@ -1225,6 +1225,27 @@
         });
     }
 
+    function annotateArtistPageHeading() {
+        const heading = document.querySelector('h3#artistname');
+        if (!heading || heading.dataset.hitomiNameMapAnnotated) return;
+
+        const romajiText = normalizeMetadataText(heading.textContent);
+        const romaji = normalizeNameMapKey(romajiText);
+        const japanese = nameMap.author?.[romaji];
+
+        heading.dataset.hitomiNameMapAnnotated = '1';
+        heading.dataset.hitomiNameMapOriginal = romajiText;
+        if (!japanese) return;
+
+        // Match the all-artists page format so the canonical romaji remains visible.
+        const romajiSpan = document.createElement('span');
+        romajiSpan.textContent = romajiText;
+        romajiSpan.style.fontSize = '0.6em';
+
+        heading.textContent = '';
+        heading.append(`${japanese} `, romajiSpan);
+    }
+
     async function blacklistClickHandler(e) {
         if (e.target.closest(`#${filterPanelId}`)) return;
 
@@ -1601,6 +1622,7 @@
                 const currentBlackList = await loadBlacklist();
                 filter(currentBlackList);
                 annotateNameMapLinks(gallery);
+                annotateArtistPageHeading();
                 refreshDownloadIndicators().catch(() => {});
             }
         });
@@ -1610,6 +1632,7 @@
         if (hasContent) {
             filter(blackList);
             annotateNameMapLinks(gallery);
+            annotateArtistPageHeading();
             refreshDownloadIndicators().catch(() => {});
         }
     }
@@ -1638,6 +1661,7 @@
         if (await waitForBookPageGallery()) {
             if (filterEnabled) highlightBookPageBlacklistMatches(blackList);
             annotateNameMapLinks(document.querySelector('div.gallery'));
+            annotateArtistPageHeading();
         }
     }
 
