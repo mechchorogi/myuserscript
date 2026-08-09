@@ -1011,6 +1011,10 @@
     function refreshFilter(blackList) {
         clearFilter();
         filter(blackList);
+        // clearFilter()/filter() only know about foldedBookIds and blacklist matches, so a
+        // book folded because it was already downloaded (a separate, unrecorded fold) would
+        // otherwise be left open here. Reapply that fold too.
+        refreshDownloadIndicators().catch(() => {});
         if (filterEnabled) {
             highlightBookPageBlacklistMatches(blackList);
         } else {
