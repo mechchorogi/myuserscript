@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hitomi::Tweak
 // @namespace    http://hitomi.la/
-// @version      1.10.0
+// @version      1.11.0
 // @description  Filter, fold, track downloads, show reader progress, and add keyboard shortcuts on hitomi.la
 // @author       mechchorogi
 // @match        https://hitomi.la/*
