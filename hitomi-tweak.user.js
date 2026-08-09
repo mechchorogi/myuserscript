@@ -412,6 +412,34 @@
                 text-decoration: line-through !important;
             }
 
+            .hitomi-name-map-edit-button {
+                margin-left: 0.3em;
+                padding: 0 0.2em;
+                border: 0;
+                background: transparent;
+                color: inherit;
+                font-size: 0.75em;
+                line-height: 1.2;
+                cursor: pointer;
+                vertical-align: baseline;
+            }
+
+            .hitomi-name-map-inline-input {
+                box-sizing: border-box;
+                width: 8em;
+                height: 1.5em;
+                margin-left: 0.3em;
+                padding: 0 0.2em;
+                font: inherit;
+                font-size: 0.75em;
+                line-height: 1.2;
+                vertical-align: baseline;
+            }
+
+            .hitomi-name-map-resolved {
+                text-transform: none !important;
+            }
+
             @keyframes hitomi-tweak-shake-blocked {
                 0%, 100% { transform: translateX(0); }
                 15%, 45%, 75% { transform: translateX(-7px); }
@@ -1076,9 +1104,99 @@
             link.dataset.hitomiNameMapAnnotated = '1';
             // Preserve the canonical romaji for metadata readers after changing the visible label.
             link.dataset.hitomiNameMapOriginal = romajiText;
-            if (!japanese) return;
+            if (!japanese) {
+                if (kind !== 'author' && kind !== 'group') return;
+
+                const editButton = document.createElement('button');
+                editButton.type = 'button';
+                editButton.className = 'hitomi-name-map-edit-button';
+                editButton.textContent = '✎';
+                editButton.title = 'Add Japanese name';
+                editButton.setAttribute('aria-label', `Add Japanese name for ${romajiText}`);
+                editButton.dataset.hitomiNameMapKind = kind;
+                editButton.dataset.hitomiNameMapRomaji = romaji;
+                link.insertAdjacentElement('afterend', editButton);
+                return;
+            }
 
             link.textContent = japanese;
+            if (kind === 'author' || kind === 'group') link.classList.add('hitomi-name-map-resolved');
+        });
+    }
+
+    function applyInlineNameMapUpdate(kind, romaji, japanese) {
+        // Compare dataset values in JavaScript because names may contain characters
+        // that are unsafe to interpolate into a CSS attribute selector.
+        document.querySelectorAll('button[data-hitomi-name-map-kind]').forEach(button => {
+            if (button.dataset.hitomiNameMapKind !== kind || button.dataset.hitomiNameMapRomaji !== romaji) return;
+
+            const input = button.previousElementSibling?.matches('.hitomi-name-map-inline-input')
+                ? button.previousElementSibling
+                : null;
+            const link = (input?.previousElementSibling || button.previousElementSibling);
+            if (link?.matches('a[href]')) {
+                link.textContent = japanese;
+                link.classList.add('hitomi-name-map-resolved');
+            }
+            input?.remove();
+            button.remove();
+        });
+    }
+
+    function installInlineNameMapEditor() {
+        document.body.addEventListener('click', event => {
+            const button = event.target.closest('button[data-hitomi-name-map-kind]');
+            if (!button) return;
+
+            event.preventDefault();
+            event.stopPropagation();
+
+            const kind = button.dataset.hitomiNameMapKind;
+            const romaji = button.dataset.hitomiNameMapRomaji;
+            if ((kind !== 'author' && kind !== 'group') || !romaji || button.hidden) return;
+
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'hitomi-name-map-inline-input';
+            input.setAttribute('aria-label', `Japanese name for ${romaji}`);
+            button.insertAdjacentElement('beforebegin', input);
+            button.hidden = true;
+            input.focus();
+
+            let canceled = false;
+            input.addEventListener('keydown', keyEvent => {
+                if (keyEvent.isComposing) return;
+                if (keyEvent.key === 'Enter') {
+                    keyEvent.preventDefault();
+                    input.blur();
+                } else if (keyEvent.key === 'Escape') {
+                    keyEvent.preventDefault();
+                    canceled = true;
+                    input.blur();
+                }
+            });
+
+            input.addEventListener('blur', async () => {
+                const japanese = input.value.trim();
+                if (canceled || !japanese) {
+                    input.remove();
+                    button.hidden = false;
+                    return;
+                }
+
+                input.disabled = true;
+                try {
+                    await updateNameMap(map => {
+                        map[kind][romaji] = japanese;
+                        return true;
+                    });
+                    applyInlineNameMapUpdate(kind, romaji, japanese);
+                } catch (error) {
+                    input.remove();
+                    button.hidden = false;
+                    console.error('Failed to update name map.', error);
+                }
+            }, { once: true });
         });
     }
 
@@ -4170,6 +4288,7 @@
         }
 
         await loadNameMap();
+        installInlineNameMapEditor();
         installEnhancer();
         installDownloadNavigationGuard();
         installHistory();
