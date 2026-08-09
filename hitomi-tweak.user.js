@@ -122,6 +122,10 @@
         return location.pathname === nameMapPagePath;
     }
 
+    function isAllArtistsPage() {
+        return /^\/allartists-/.test(location.pathname);
+    }
+
     function installDownloadNavLinkStyle() {
         const styleId = 'hitomi-tweak-download-nav-link-style';
         if (document.getElementById(styleId)) return;
@@ -1075,6 +1079,31 @@
             if (!japanese) return;
 
             link.textContent = japanese;
+        });
+    }
+
+    function annotateAllArtistsPage(root) {
+        // Unlike the list/book-page annotation, this page has no other context for the
+        // name (just the bare romaji link followed by a "(count)" text node), so show
+        // both: the Japanese name first, with the original romaji kept but shrunk.
+        if (!root) return;
+        root.querySelectorAll('a[href^="/artist/"]').forEach(link => {
+            if (link.dataset.hitomiNameMapAnnotated) return;
+
+            const romajiText = normalizeMetadataText(link.textContent);
+            const romaji = normalizeNameMapKey(romajiText);
+            const japanese = nameMap.author?.[romaji];
+
+            link.dataset.hitomiNameMapAnnotated = '1';
+            link.dataset.hitomiNameMapOriginal = romajiText;
+            if (!japanese) return;
+
+            const romajiSpan = document.createElement('span');
+            romajiSpan.textContent = romajiText;
+            romajiSpan.style.fontSize = '0.6em';
+
+            link.textContent = '';
+            link.append(`${japanese} `, romajiSpan);
         });
     }
 
@@ -4122,6 +4151,11 @@
         }
         if (isDownloadHistoryPage()) {
             location.replace(new URL(downloadPagePath, location.origin).href);
+            return;
+        }
+        if (isAllArtistsPage()) {
+            await loadNameMap();
+            annotateAllArtistsPage(document.querySelector('div.content'));
             return;
         }
         if (await maybeRedirectToPreferredLanguage()) return;
