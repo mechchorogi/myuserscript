@@ -1105,7 +1105,7 @@
             // Preserve the canonical romaji for metadata readers after changing the visible label.
             link.dataset.hitomiNameMapOriginal = romajiText;
             if (!japanese) {
-                if (kind !== 'author' && kind !== 'group') return;
+                if (kind !== 'author' && kind !== 'group' && kind !== 'series') return;
 
                 const editButton = document.createElement('button');
                 editButton.type = 'button';
@@ -1120,7 +1120,7 @@
             }
 
             link.textContent = japanese;
-            if (kind === 'author' || kind === 'group') link.classList.add('hitomi-name-map-resolved');
+            if (kind === 'author' || kind === 'group' || kind === 'series') link.classList.add('hitomi-name-map-resolved');
         });
     }
 
@@ -1153,7 +1153,7 @@
 
             const kind = button.dataset.hitomiNameMapKind;
             const romaji = button.dataset.hitomiNameMapRomaji;
-            if ((kind !== 'author' && kind !== 'group') || !romaji || button.hidden) return;
+            if ((kind !== 'author' && kind !== 'group' && kind !== 'series') || !romaji || button.hidden) return;
 
             const input = document.createElement('input');
             input.type = 'text';
