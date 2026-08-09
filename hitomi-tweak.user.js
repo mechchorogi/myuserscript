@@ -3736,7 +3736,7 @@
             GM.openInTab(link.href, {
                 active: false,
                 insert: true,
-                setParent: true
+                setParent: false
             });
         } else {
             const opened = window.open(link.href, '_blank', 'noopener,noreferrer');
