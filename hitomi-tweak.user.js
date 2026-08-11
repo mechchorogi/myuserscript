@@ -834,7 +834,8 @@
                 outline-offset: 3px;
             }
 
-            div.gallery-content > div.${focusedBookClassName} {
+            div.gallery-content > div.${focusedBookClassName},
+            div.gallery.${focusedBookClassName} {
                 position: relative;
                 outline: 3px solid rgba(56, 189, 248, 0.95);
                 outline-offset: 8px;
@@ -4561,7 +4562,9 @@
     }
 
     function getBooks() {
-        return Array.from(document.querySelectorAll('div.gallery-content > div'));
+        const relatedBooks = Array.from(document.querySelectorAll('div.gallery-content > div'));
+        const mainBook = document.querySelector('div.gallery');
+        return mainBook ? [mainBook, ...relatedBooks] : relatedBooks;
     }
 
     function getListNavigationScrollPadding() {
@@ -4638,7 +4641,7 @@
 
     function openAuthorLinks() {
         const book = getFocusedBook();
-        const links = book
+        const links = book?.matches('div.gallery-content > div')
             ? book.querySelectorAll(':scope div.artist-list li a[href]')
             : document.querySelectorAll('h2#artists > ul > li > a[href]');
         const urls = [...new Set(Array.from(links, link => new URL(link.getAttribute('href'), location.href).href))];
@@ -4759,7 +4762,7 @@
     }
 
     function handleFoldFocusedBook() {
-        if (!focusedBook) return false;
+        if (!focusedBook || !focusedBook.matches('div.gallery-content > div')) return false;
 
         getFilterBook(focusedBook).toggleManualFolded();
         return true;
@@ -4798,7 +4801,8 @@
             if (isReaderPage()) return;
 
             e.preventDefault();
-            if (getFocusedBook()) {
+            const focused = getFocusedBook();
+            if (focused?.matches('div.gallery-content > div')) {
                 downloadFocusedBookFromList();
                 return;
             }
