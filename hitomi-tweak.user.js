@@ -42,7 +42,10 @@
     const foldedBookIdsKey = 'hitomi-tweak-folded-book-ids';
     const nameMapKey = 'hitomi-tweak-name-map';
     const nameMapLockName = 'hitomi-tweak-name-map-lock';
+    const favoritesKey = 'hitomi-tweak-favorites';
+    const favoritesLockName = 'hitomi-tweak-favorites-lock';
     const nameMapPagePath = '/hitomi-tweak-name-map.html';
+    const favoritesPagePath = '/hitomi-tweak-favorites.html';
     const downloadPagePath = '/hitomi-tweak-download.html';
     const preferredLanguageKey = 'hitomi-tweak-preferred-language';
     const closeBookPageAfterDownloadKey = 'hitomi-tweak-close-book-page-after-download';
@@ -102,6 +105,8 @@
     let listDownloadProgressStack = null;
     let nameMap = { version: 1, group: {}, author: {}, series: {} };
     let nameMapWriteQueue = Promise.resolve();
+    let favorites = { version: 1, author: {}, group: {} };
+    let favoritesWriteQueue = Promise.resolve();
     let titleBeforeListDownloads = null;
     let unifiedDownloadsWriteQueue = Promise.resolve();
 
@@ -120,6 +125,10 @@
 
     function isNameMapPage() {
         return location.pathname === nameMapPagePath;
+    }
+
+    function isFavoritesPage() {
+        return location.pathname === favoritesPagePath;
     }
 
     function isAllArtistsPage() {
@@ -149,6 +158,38 @@
         document.head.appendChild(style);
     }
 
+    function installConsolidatedNavMenu() {
+        const navList = document.querySelector('.navbar nav ul');
+        if (!navList || document.getElementById('hitomi-tweak-more-nav')) return;
+
+        const targetItems = [...new Set([
+            navList.querySelector('a[href^="/alltags-"]')?.closest('li'),
+            navList.querySelector('a[href^="/allseries-"]')?.closest('li'),
+            navList.querySelector('a[href^="/allcharacters-"]')?.closest('li')
+        ].filter(item => item?.parentElement === navList))];
+        if (!targetItems.length) return;
+
+        const moreItem = document.createElement('li');
+        const trigger = document.createElement('a');
+        const languageArrow = document.querySelector('#lang > a img[src*="down-arrow.png"]');
+        const arrow = languageArrow?.cloneNode(false) || document.createElement('img');
+        const dropdown = document.createElement('div');
+        const dropdownList = document.createElement('ul');
+
+        moreItem.id = 'hitomi-tweak-more-nav';
+        arrow.src = '//ltn.gold-usergeneratedcontent.net/down-arrow.png';
+        arrow.alt = '';
+        trigger.append('MORE ', arrow);
+        dropdown.id = 'hitomi-tweak-more-nav-drop';
+        dropdown.appendChild(dropdownList);
+        moreItem.append(trigger, dropdown);
+
+        // Insert the container before moving the original nodes so ARTISTS and the
+        // site's language menu retain their existing relative positions.
+        navList.insertBefore(moreItem, targetItems[0]);
+        targetItems.forEach(item => dropdownList.appendChild(item));
+    }
+
     function installDownloadNavLink() {
         // The LANGUAGE dropdown is managed differently across page types, so it
         // cannot be reused reliably. Add an independent download navigation item.
@@ -164,6 +205,23 @@
         link.target = '_blank';
         link.rel = 'noopener noreferrer';
         link.textContent = 'DOWNLOADS';
+        li.appendChild(link);
+        navList.appendChild(li);
+    }
+
+    function installFavoritesNavLink() {
+        const navList = document.querySelector('.navbar nav ul');
+        if (!navList || navList.querySelector('.hitomi-tweak-favorites-nav-link')) return;
+
+        installDownloadNavLinkStyle();
+
+        const li = document.createElement('li');
+        const link = document.createElement('a');
+        link.className = 'hitomi-tweak-favorites-nav-link';
+        link.href = new URL(favoritesPagePath, location.origin).href;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = 'FAVORITES';
         li.appendChild(link);
         navList.appendChild(li);
     }
@@ -255,6 +313,83 @@
             }
             return result;
         });
+    }
+
+    function normalizeFavorites(input) {
+        if (!isPlainObject(input) || input.version !== 1 || !isPlainObject(input.author) || !isPlainObject(input.group)) {
+            throw new Error('Invalid favorites format');
+        }
+
+        const normalized = { version: 1, author: {}, group: {} };
+        for (const kind of ['author', 'group']) {
+            for (const [key, value] of Object.entries(input[kind])) {
+                const normalizedKey = normalizeNameMapKey(key);
+                // Favorites are boolean flags; discard malformed persisted values.
+                if (normalizedKey && value === true) normalized[kind][normalizedKey] = true;
+            }
+        }
+        return normalized;
+    }
+
+    function loadLocalFavorites() {
+        try {
+            return normalizeFavorites(JSON.parse(localStorage.getItem(favoritesKey) || 'null'));
+        } catch (e) {
+            return { version: 1, author: {}, group: {} };
+        }
+    }
+
+    function saveLocalFavorites(map) {
+        try {
+            localStorage.setItem(favoritesKey, JSON.stringify(map));
+        } catch (e) {
+            // Favorites mirroring is best-effort; GM storage remains the canonical copy.
+        }
+    }
+
+    async function loadFavorites() {
+        const localMap = loadLocalFavorites();
+        try {
+            favorites = normalizeFavorites(await GM.getValue(favoritesKey, localMap));
+        } catch (e) {
+            favorites = localMap;
+        }
+        saveLocalFavorites(favorites);
+        return favorites;
+    }
+
+    async function saveFavorites(map) {
+        favorites = normalizeFavorites(map);
+        saveLocalFavorites(favorites);
+        await GM.setValue(favoritesKey, favorites);
+    }
+
+    async function withFavoritesLock(task) {
+        if (navigator.locks?.request) {
+            return navigator.locks.request(favoritesLockName, async () => task());
+        }
+
+        // Keep favorite writes ordered in this tab when Web Locks are unavailable.
+        const next = favoritesWriteQueue.then(task, task);
+        favoritesWriteQueue = next.catch(() => {});
+        return next;
+    }
+
+    async function updateFavorites(mutator) {
+        return withFavoritesLock(async () => {
+            const fresh = normalizeFavorites(await GM.getValue(favoritesKey, loadLocalFavorites()));
+            const before = JSON.stringify(fresh);
+            const result = await mutator(fresh);
+
+            if (JSON.stringify(fresh) !== before) {
+                await saveFavorites(fresh);
+            }
+            return result;
+        });
+    }
+
+    function isFavorite(kind, romaji) {
+        return favorites[kind]?.[romaji] === true;
     }
 
     function resolveJapaneseName(name, kind) {
@@ -438,6 +573,87 @@
 
             .hitomi-name-map-resolved {
                 text-transform: none !important;
+            }
+
+            .hitomi-tweak-favorite-star {
+                margin-right: 0.3em;
+                padding: 0;
+                border: 0;
+                background: transparent;
+                color: inherit;
+                cursor: pointer;
+                vertical-align: baseline;
+                line-height: 1;
+            }
+
+            .hitomi-tweak-favorite-star svg {
+                display: block;
+            }
+
+            .hitomi-tweak-favorite-star svg path {
+                fill: none;
+                stroke: currentColor;
+                stroke-width: 1.5;
+            }
+
+            .hitomi-tweak-favorite-star.is-favorited svg path {
+                fill: #ffaa00;
+                stroke: #4a3200;
+                stroke-width: 2;
+            }
+
+            #hitomi-tweak-more-nav {
+                position: relative;
+            }
+
+            #hitomi-tweak-more-nav-drop {
+                display: none;
+                position: absolute;
+                margin: 0;
+                padding: 0 15px;
+                z-index: 99999;
+                background-color: #29313d;
+                left: 0;
+                min-width: 100%;
+                max-height: 500px;
+                overflow-y: auto;
+                white-space: nowrap;
+            }
+
+            #hitomi-tweak-more-nav:hover #hitomi-tweak-more-nav-drop {
+                display: block;
+            }
+
+            #hitomi-tweak-more-nav-drop ul {
+                list-style: none;
+                display: block;
+                margin: 0;
+                padding: 10px 0;
+            }
+
+            #hitomi-tweak-more-nav-drop li {
+                color: #aaaaaa;
+                display: block;
+                position: relative;
+                margin-bottom: 10px;
+            }
+
+            #hitomi-tweak-more-nav-drop li:last-child {
+                margin-bottom: 0;
+            }
+
+            #hitomi-tweak-more-nav-drop a {
+                padding: 0;
+                color: inherit;
+                text-decoration: none;
+                text-transform: uppercase;
+                font-weight: normal;
+                display: inline-block;
+            }
+
+            #hitomi-tweak-more-nav-drop a:hover {
+                color: #fff;
+                font-weight: bold;
             }
 
             @keyframes hitomi-tweak-shake-blocked {
@@ -1092,13 +1308,27 @@
         // galleries" widget on book pages (other books' links, not excluded here).
         if (!root) return;
         root.querySelectorAll('a[href]').forEach(link => {
-            if (link.dataset.hitomiNameMapAnnotated) return;
-
             const kind = getNameMapKindFromLink(link);
             if (!kind) return;
 
-            const romajiText = normalizeMetadataText(link.textContent);
+            const romajiText = link.dataset.hitomiNameMapOriginal || normalizeMetadataText(link.textContent);
             const romaji = normalizeNameMapKey(romajiText);
+            if ((kind === 'author' || kind === 'group') && !link.dataset.hitomiFavoriteAnnotated) {
+                const favoriteButton = document.createElement('button');
+                favoriteButton.type = 'button';
+                favoriteButton.className = 'hitomi-tweak-favorite-star';
+                favoriteButton.title = `Toggle favorite for ${romajiText}`;
+                favoriteButton.setAttribute('aria-label', `Toggle favorite for ${romajiText}`);
+                favoriteButton.dataset.hitomiFavoriteKind = kind;
+                favoriteButton.dataset.hitomiFavoriteRomaji = romaji;
+                favoriteButton.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M12 .587l3.668 7.568L24 9.306l-6.064 5.828 1.48 8.279L12 19.771l-7.416 3.642 1.48-8.279L0 9.306l8.332-1.151Z"/></svg>';
+                favoriteButton.classList.toggle('is-favorited', isFavorite(kind, romaji));
+                link.dataset.hitomiFavoriteAnnotated = '1';
+                link.insertAdjacentElement('beforebegin', favoriteButton);
+            }
+
+            if (link.dataset.hitomiNameMapAnnotated) return;
+
             const japanese = nameMap[kind]?.[romaji];
 
             link.dataset.hitomiNameMapAnnotated = '1';
@@ -1197,6 +1427,42 @@
                     console.error('Failed to update name map.', error);
                 }
             }, { once: true });
+        });
+    }
+
+    function installFavoriteStars() {
+        document.body.addEventListener('click', async event => {
+            const button = event.target.closest('button[data-hitomi-favorite-kind]');
+            if (!button) return;
+
+            event.preventDefault();
+            event.stopPropagation();
+
+            const kind = button.dataset.hitomiFavoriteKind;
+            const romaji = button.dataset.hitomiFavoriteRomaji;
+            if ((kind !== 'author' && kind !== 'group') || !romaji) return;
+
+            try {
+                const favorited = await updateFavorites(map => {
+                    const nextFavorited = map[kind][romaji] !== true;
+                    if (nextFavorited) {
+                        map[kind][romaji] = true;
+                    } else {
+                        delete map[kind][romaji];
+                    }
+                    return nextFavorited;
+                });
+
+                // Compare dataset values in JavaScript because names may contain
+                // characters that are unsafe to interpolate into a CSS selector.
+                document.querySelectorAll('button[data-hitomi-favorite-kind]').forEach(candidate => {
+                    if (candidate.dataset.hitomiFavoriteKind !== kind
+                        || candidate.dataset.hitomiFavoriteRomaji !== romaji) return;
+                    candidate.classList.toggle('is-favorited', favorited);
+                });
+            } catch (error) {
+                console.error('Failed to update favorites.', error);
+            }
         });
     }
 
@@ -1663,6 +1929,168 @@
             annotateNameMapLinks(document.querySelector('div.gallery'));
             annotateArtistPageHeading();
         }
+    }
+
+    async function renderFavoritesPage() {
+        await loadNameMap();
+        await loadFavorites();
+
+        document.title = 'Hitomi::Tweak Favorites';
+        document.body.replaceChildren();
+
+        const style = document.createElement('style');
+        style.textContent = `
+            :root {
+                color-scheme: light;
+            }
+            body {
+                margin: 0;
+                background: #f6f7f9;
+                color: #1f2328;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+            }
+            .hitomi-favorites-page {
+                box-sizing: border-box;
+                min-height: 100vh;
+                padding: 24px;
+            }
+            .hitomi-favorites-page h1 {
+                margin: 0 0 16px;
+                font-size: 24px;
+            }
+            .hitomi-favorites-search {
+                box-sizing: border-box;
+                width: min(100%, 420px);
+                margin-bottom: 16px;
+                padding: 8px 10px;
+                border: 1px solid #d0d7de;
+                border-radius: 6px;
+                font: inherit;
+            }
+            .hitomi-favorites-table-wrap {
+                overflow-x: auto;
+                border: 1px solid #d0d7de;
+                border-radius: 6px;
+                background: #fff;
+            }
+            .hitomi-favorites-table {
+                width: 100%;
+                border-collapse: collapse;
+            }
+            .hitomi-favorites-table th,
+            .hitomi-favorites-table td {
+                padding: 10px 12px;
+                border-bottom: 1px solid #d8dee4;
+                text-align: left;
+                vertical-align: middle;
+            }
+            .hitomi-favorites-table th {
+                background: #f6f8fa;
+            }
+            .hitomi-favorites-table tr:last-child td {
+                border-bottom: 0;
+            }
+            .hitomi-favorites-table button {
+                padding: 4px 8px;
+                border: 1px solid #d0d7de;
+                border-radius: 6px;
+                background: #fff;
+                color: #cf222e;
+                cursor: pointer;
+            }
+            .hitomi-favorites-empty {
+                margin: 16px 0 0;
+                color: #57606a;
+            }
+        `;
+        document.head.appendChild(style);
+
+        const page = document.createElement('main');
+        const title = document.createElement('h1');
+        const searchInput = document.createElement('input');
+        const tableWrap = document.createElement('div');
+        const table = document.createElement('table');
+        const thead = document.createElement('thead');
+        const headerRow = document.createElement('tr');
+        const tbody = document.createElement('tbody');
+        const emptyMessage = document.createElement('p');
+
+        page.className = 'hitomi-favorites-page';
+        title.textContent = 'Favorites';
+        searchInput.type = 'search';
+        searchInput.className = 'hitomi-favorites-search';
+        searchInput.placeholder = 'Search romaji or Japanese name';
+        searchInput.setAttribute('aria-label', 'Search favorites');
+        tableWrap.className = 'hitomi-favorites-table-wrap';
+        table.className = 'hitomi-favorites-table';
+        emptyMessage.className = 'hitomi-favorites-empty';
+
+        for (const label of ['Kind', 'Name', 'Link', 'Remove']) {
+            const th = document.createElement('th');
+            th.textContent = label;
+            headerRow.appendChild(th);
+        }
+        thead.appendChild(headerRow);
+        table.append(thead, tbody);
+        tableWrap.appendChild(table);
+        page.append(title, searchInput, tableWrap, emptyMessage);
+        document.body.appendChild(page);
+
+        function getFavoriteEntries() {
+            return ['author', 'group']
+                .flatMap(kind => Object.keys(favorites[kind] || {}).map(romaji => ({ kind, romaji })))
+                .sort((a, b) => a.kind.localeCompare(b.kind)
+                    || a.romaji.localeCompare(b.romaji, undefined, { numeric: true, sensitivity: 'base' }));
+        }
+
+        function renderTable() {
+            const allEntries = getFavoriteEntries();
+            const query = searchInput.value.trim().toLowerCase();
+            const entries = allEntries.filter(entry => {
+                const japanese = nameMap[entry.kind]?.[entry.romaji] || '';
+                return !query || entry.romaji.toLowerCase().includes(query) || japanese.toLowerCase().includes(query);
+            });
+
+            tbody.replaceChildren(...entries.map(entry => {
+                const tr = document.createElement('tr');
+                const kindTd = document.createElement('td');
+                const nameTd = document.createElement('td');
+                const linkTd = document.createElement('td');
+                const removeTd = document.createElement('td');
+                const link = document.createElement('a');
+                const removeButton = document.createElement('button');
+                const japanese = nameMap[entry.kind]?.[entry.romaji];
+                const hitomiCategoryPath = entry.kind === 'author' ? 'artist' : 'group';
+
+                kindTd.textContent = entry.kind;
+                nameTd.textContent = japanese ? `${japanese} (${entry.romaji})` : entry.romaji;
+                link.href = `https://hitomi.la/${hitomiCategoryPath}/${encodeURIComponent(entry.romaji)}-all.html`;
+                link.target = '_blank';
+                link.rel = 'noopener noreferrer';
+                link.textContent = 'Open';
+                removeButton.type = 'button';
+                removeButton.textContent = 'Remove';
+                removeButton.addEventListener('click', async () => {
+                    await updateFavorites(map => {
+                        delete map[entry.kind][entry.romaji];
+                        return true;
+                    });
+                    renderTable();
+                });
+
+                linkTd.appendChild(link);
+                removeTd.appendChild(removeButton);
+                tr.append(kindTd, nameTd, linkTd, removeTd);
+                return tr;
+            }));
+
+            tableWrap.hidden = entries.length === 0;
+            emptyMessage.hidden = entries.length !== 0;
+            emptyMessage.textContent = allEntries.length === 0 ? 'No favorites yet.' : 'No matching favorites.';
+        }
+
+        searchInput.addEventListener('input', renderTable);
+        renderTable();
     }
 
     async function renderNameMapPage() {
@@ -4287,6 +4715,10 @@
             await renderNameMapPage();
             return;
         }
+        if (isFavoritesPage()) {
+            await renderFavoritesPage();
+            return;
+        }
         if (isDownloadPage()) {
             await renderDownloadPage();
             return;
@@ -4304,7 +4736,9 @@
 
         installStyles();
         document.addEventListener('keydown', handleGlobalKeydown);
+        installConsolidatedNavMenu();
         installDownloadNavLink();
+        installFavoritesNavLink();
 
         if (isReaderPage()) {
             installReaderProgress();
@@ -4313,6 +4747,8 @@
 
         await loadNameMap();
         installInlineNameMapEditor();
+        await loadFavorites();
+        installFavoriteStars();
         installEnhancer();
         installDownloadNavigationGuard();
         installHistory();
