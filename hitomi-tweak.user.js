@@ -5035,6 +5035,11 @@
             return;
         }
         if (isAllArtistsPage()) {
+            installStyles();
+            installConsolidatedNavMenu();
+            installDownloadNavLink();
+            installFavoritesNavLink();
+            installNameMapNavLink();
             await loadNameMap();
             annotateAllArtistsPage(document.querySelector('div.content'));
             return;
