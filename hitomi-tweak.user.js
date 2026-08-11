@@ -44,6 +44,8 @@
     const nameMapLockName = 'hitomi-tweak-name-map-lock';
     const favoritesKey = 'hitomi-tweak-favorites';
     const favoritesLockName = 'hitomi-tweak-favorites-lock';
+    const favoritesWatchKey = 'hitomi-tweak-favorites-watch';
+    const favoritesWatchLockName = 'hitomi-tweak-favorites-watch-lock';
     const nameMapPagePath = '/hitomi-tweak-name-map.html';
     const favoritesPagePath = '/hitomi-tweak-favorites.html';
     const downloadPagePath = '/hitomi-tweak-download.html';
@@ -107,6 +109,8 @@
     let nameMapWriteQueue = Promise.resolve();
     let favorites = { version: 1, author: {}, group: {} };
     let favoritesWriteQueue = Promise.resolve();
+    let favoritesWatch = { version: 1, author: {}, group: {} };
+    let favoritesWatchWriteQueue = Promise.resolve();
     let titleBeforeListDownloads = null;
     let unifiedDownloadsWriteQueue = Promise.resolve();
 
@@ -407,6 +411,96 @@
 
     function isFavorite(kind, romaji) {
         return favorites[kind]?.[romaji] === true;
+    }
+
+    function normalizeFavoritesWatch(input) {
+        if (!isPlainObject(input) || input.version !== 1 || !isPlainObject(input.author) || !isPlainObject(input.group)) {
+            throw new Error('Invalid favorites watch format');
+        }
+
+        const normalized = { version: 1, author: {}, group: {} };
+        for (const kind of ['author', 'group']) {
+            for (const [key, value] of Object.entries(input[kind])) {
+                const normalizedKey = normalizeNameMapKey(key);
+                if (normalizedKey && Number.isInteger(value) && value > 0) normalized[kind][normalizedKey] = value;
+            }
+        }
+        return normalized;
+    }
+
+    function loadLocalFavoritesWatch() {
+        try {
+            return normalizeFavoritesWatch(JSON.parse(localStorage.getItem(favoritesWatchKey) || 'null'));
+        } catch (e) {
+            return { version: 1, author: {}, group: {} };
+        }
+    }
+
+    function saveLocalFavoritesWatch(map) {
+        try {
+            localStorage.setItem(favoritesWatchKey, JSON.stringify(map));
+        } catch (e) {
+            // Watch-state mirroring is best-effort; GM storage remains canonical.
+        }
+    }
+
+    async function loadFavoritesWatch() {
+        const localMap = loadLocalFavoritesWatch();
+        try {
+            favoritesWatch = normalizeFavoritesWatch(await GM.getValue(favoritesWatchKey, localMap));
+        } catch (e) {
+            favoritesWatch = localMap;
+        }
+        saveLocalFavoritesWatch(favoritesWatch);
+        return favoritesWatch;
+    }
+
+    async function saveFavoritesWatch(map) {
+        favoritesWatch = normalizeFavoritesWatch(map);
+        saveLocalFavoritesWatch(favoritesWatch);
+        await GM.setValue(favoritesWatchKey, favoritesWatch);
+    }
+
+    async function withFavoritesWatchLock(task) {
+        if (navigator.locks?.request) {
+            return navigator.locks.request(favoritesWatchLockName, async () => task());
+        }
+
+        // Keep watch-state writes ordered in this tab when Web Locks are unavailable.
+        const next = favoritesWatchWriteQueue.then(task, task);
+        favoritesWatchWriteQueue = next.catch(() => {});
+        return next;
+    }
+
+    async function updateFavoritesWatch(mutator) {
+        return withFavoritesWatchLock(async () => {
+            const fresh = normalizeFavoritesWatch(await GM.getValue(favoritesWatchKey, loadLocalFavoritesWatch()));
+            const before = JSON.stringify(fresh);
+            const result = await mutator(fresh);
+
+            if (JSON.stringify(fresh) !== before) {
+                await saveFavoritesWatch(fresh);
+            }
+            return result;
+        });
+    }
+
+    function getLastSeenGalleryId(kind, romaji) {
+        return favoritesWatch[kind]?.[romaji] ?? null;
+    }
+
+    async function fetchLatestGalleryId(kind, romaji) {
+        const area = kind === 'author' ? 'artist' : 'group';
+        const url = `https://ltn.gold-usergeneratedcontent.net/${area}/${encodeURIComponent(romaji)}-all.nozomi`;
+        try {
+            const response = await fetch(url, { headers: { Range: 'bytes=0-3' } });
+            if (!response.ok) return null;
+            const buffer = await response.arrayBuffer();
+            if (buffer.byteLength < 4) return null;
+            return new DataView(buffer).getInt32(0, false);
+        } catch (e) {
+            return null;
+        }
     }
 
     function resolveJapaneseName(name, kind) {
@@ -1470,6 +1564,23 @@
                     return nextFavorited;
                 });
 
+                if (favorited) {
+                    fetchLatestGalleryId(kind, romaji).then(latestId => {
+                        // The fetch is intentionally non-blocking; do not restore watch
+                        // state if the favorite was removed while the request was pending.
+                        if (!isFavorite(kind, romaji) || !Number.isInteger(latestId) || latestId <= 0) return;
+                        return updateFavoritesWatch(map => {
+                            map[kind][romaji] = latestId;
+                            return true;
+                        });
+                    }).catch(() => {});
+                } else {
+                    updateFavoritesWatch(map => {
+                        delete map[kind][romaji];
+                        return true;
+                    }).catch(() => {});
+                }
+
                 // Compare dataset values in JavaScript because names may contain
                 // characters that are unsafe to interpolate into a CSS selector.
                 document.querySelectorAll('button[data-hitomi-favorite-kind]').forEach(candidate => {
@@ -1956,6 +2067,7 @@
     async function renderFavoritesPage() {
         await loadNameMap();
         await loadFavorites();
+        await loadFavoritesWatch();
 
         document.title = 'Hitomi::Tweak Favorites';
         document.body.replaceChildren();
@@ -2012,6 +2124,9 @@
             .hitomi-favorites-table tr:last-child td {
                 border-bottom: 0;
             }
+            .hitomi-favorites-table tr.hitomi-favorites-selected-row {
+                background: #eef2ff;
+            }
             .hitomi-favorites-table button {
                 padding: 4px 8px;
                 border: 1px solid #d0d7de;
@@ -2023,6 +2138,31 @@
             .hitomi-favorites-empty {
                 margin: 16px 0 0;
                 color: #57606a;
+            }
+            .hitomi-favorites-spinner {
+                display: inline-block;
+                width: 14px;
+                height: 14px;
+                border: 2px solid #d0d7de;
+                border-top-color: #57606a;
+                border-radius: 50%;
+                animation: hitomi-favorites-spin 0.8s linear infinite;
+            }
+            @keyframes hitomi-favorites-spin {
+                to { transform: rotate(360deg); }
+            }
+            .hitomi-favorites-new-badge {
+                display: inline-block;
+                padding: 2px 6px;
+                background: #cf222e;
+                color: #fff;
+                border-radius: 4px;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            .hitomi-favorites-uptodate {
+                color: #57606a;
+                font-size: 12px;
             }
         `;
         document.head.appendChild(style);
@@ -2047,7 +2187,7 @@
         table.className = 'hitomi-favorites-table';
         emptyMessage.className = 'hitomi-favorites-empty';
 
-        for (const label of ['Kind', 'Name', 'Link', 'Remove']) {
+        for (const label of ['Kind', 'Name', 'Status', 'Link', 'Remove']) {
             const th = document.createElement('th');
             th.textContent = label;
             headerRow.appendChild(th);
@@ -2058,6 +2198,77 @@
         page.append(title, searchInput, tableWrap, emptyMessage);
         document.body.appendChild(page);
 
+        const latestGalleryResults = new Map();
+        const visibleStatusCells = new Map();
+        const selectedRowClassName = 'hitomi-favorites-selected-row';
+        let selectedIndex = -1;
+
+        function getFavoriteEntryKey(entry) {
+            return JSON.stringify([entry.kind, entry.romaji]);
+        }
+
+        function renderStatus(statusTd, result) {
+            statusTd.replaceChildren();
+            if (!result || result.state === 'loading') {
+                const spinner = document.createElement('span');
+                spinner.className = 'hitomi-favorites-spinner';
+                spinner.title = 'Checking for updates';
+                spinner.setAttribute('aria-label', 'Checking for updates');
+                statusTd.appendChild(spinner);
+                return;
+            }
+
+            const status = document.createElement('span');
+            if (result.latestId === null) {
+                status.className = 'hitomi-favorites-uptodate';
+                status.textContent = '?';
+                status.title = 'Could not check for updates';
+            } else if (result.lastSeenId === null) {
+                status.className = 'hitomi-favorites-uptodate';
+                status.textContent = '—';
+                status.title = 'Open this favorite to start tracking updates';
+            } else if (result.latestId > result.lastSeenId) {
+                status.className = 'hitomi-favorites-new-badge';
+                status.textContent = 'NEW';
+            } else {
+                status.className = 'hitomi-favorites-uptodate';
+                status.textContent = 'Up to date';
+            }
+            statusTd.appendChild(status);
+        }
+
+        function refreshVisibleStatus(entry) {
+            const key = getFavoriteEntryKey(entry);
+            const statusTd = visibleStatusCells.get(key);
+            if (statusTd) renderStatus(statusTd, latestGalleryResults.get(key));
+        }
+
+        function markFavoriteSeen(entry, entryKey) {
+            const result = latestGalleryResults.get(entryKey);
+            if (!Number.isInteger(result?.latestId) || result.latestId <= 0) return;
+
+            updateFavoritesWatch(map => {
+                map[entry.kind][entry.romaji] = result.latestId;
+                return true;
+            }).then(() => {
+                result.lastSeenId = result.latestId;
+                refreshVisibleStatus(entry);
+            }).catch(error => console.error('Failed to update favorite watch state.', error));
+        }
+
+        function openFavoriteInBackground(entry) {
+            const hitomiCategoryPath = entry.kind === 'author' ? 'artist' : 'group';
+            const url = `https://hitomi.la/${hitomiCategoryPath}/${encodeURIComponent(entry.romaji)}-all.html`;
+            if (typeof GM !== 'undefined' && typeof GM.openInTab === 'function') {
+                GM.openInTab(url, { active: false, insert: true, setParent: false });
+            } else {
+                const opened = window.open(url, '_blank', 'noopener,noreferrer');
+                opened?.blur();
+                window.focus();
+            }
+            markFavoriteSeen(entry, getFavoriteEntryKey(entry));
+        }
+
         function getFavoriteEntries() {
             return ['author', 'group']
                 .flatMap(kind => Object.keys(favorites[kind] || {}).map(romaji => ({ kind, romaji })))
@@ -2065,31 +2276,83 @@
                     || a.romaji.localeCompare(b.romaji, undefined, { numeric: true, sensitivity: 'base' }));
         }
 
-        function renderTable() {
+        function getFilteredFavoriteEntries() {
             const allEntries = getFavoriteEntries();
             const query = searchInput.value.trim().toLowerCase();
-            const entries = allEntries.filter(entry => {
+            return allEntries.filter(entry => {
                 const japanese = nameMap[entry.kind]?.[entry.romaji] || '';
                 return !query || entry.romaji.toLowerCase().includes(query) || japanese.toLowerCase().includes(query);
             });
+        }
 
-            tbody.replaceChildren(...entries.map(entry => {
+        function applySelectionHighlight() {
+            tbody.querySelectorAll('tr').forEach((tr, index) => {
+                tr.classList.toggle(selectedRowClassName, index === selectedIndex);
+            });
+        }
+
+        function focusRow(index, { scrollIntoView = true } = {}) {
+            const entries = getFilteredFavoriteEntries();
+            if (!entries.length) {
+                selectedIndex = -1;
+                return;
+            }
+
+            selectedIndex = Math.max(0, Math.min(entries.length - 1, index));
+            applySelectionHighlight();
+            if (scrollIntoView) tbody.children[selectedIndex]?.scrollIntoView({ block: 'nearest' });
+        }
+
+        function handleKeydown(event) {
+            if (isEditableTarget(event.target) || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+
+            if (event.key === 'j') {
+                event.preventDefault();
+                focusRow(selectedIndex + 1);
+            } else if (event.key === 'k') {
+                event.preventDefault();
+                const entries = getFilteredFavoriteEntries();
+                focusRow(selectedIndex === -1 ? entries.length - 1 : selectedIndex - 1);
+            } else if (event.key === 'v') {
+                const entries = getFilteredFavoriteEntries();
+                const entry = entries[selectedIndex];
+                if (entry) {
+                    event.preventDefault();
+                    openFavoriteInBackground(entry);
+                }
+            }
+        }
+
+        function renderTable() {
+            const allEntries = getFavoriteEntries();
+            const entries = getFilteredFavoriteEntries();
+
+            visibleStatusCells.clear();
+            const rows = entries.map((entry, index) => {
                 const tr = document.createElement('tr');
                 const kindTd = document.createElement('td');
                 const nameTd = document.createElement('td');
+                const statusTd = document.createElement('td');
                 const linkTd = document.createElement('td');
                 const removeTd = document.createElement('td');
                 const link = document.createElement('a');
                 const removeButton = document.createElement('button');
                 const japanese = nameMap[entry.kind]?.[entry.romaji];
                 const hitomiCategoryPath = entry.kind === 'author' ? 'artist' : 'group';
+                const entryKey = getFavoriteEntryKey(entry);
 
+                tr.tabIndex = -1;
+                tr.classList.toggle(selectedRowClassName, index === selectedIndex);
+                tr.addEventListener('click', () => focusRow(index));
                 kindTd.textContent = entry.kind;
                 nameTd.textContent = japanese ? `${japanese} (${entry.romaji})` : entry.romaji;
+                visibleStatusCells.set(entryKey, statusTd);
+                renderStatus(statusTd, latestGalleryResults.get(entryKey));
                 link.href = `https://hitomi.la/${hitomiCategoryPath}/${encodeURIComponent(entry.romaji)}-all.html`;
                 link.target = '_blank';
                 link.rel = 'noopener noreferrer';
                 link.textContent = 'Open';
+                link.addEventListener('click', () => markFavoriteSeen(entry, entryKey));
                 removeButton.type = 'button';
                 removeButton.textContent = 'Remove';
                 removeButton.addEventListener('click', async () => {
@@ -2097,14 +2360,21 @@
                         delete map[entry.kind][entry.romaji];
                         return true;
                     });
+                    await updateFavoritesWatch(map => {
+                        delete map[entry.kind][entry.romaji];
+                        return true;
+                    });
+                    latestGalleryResults.delete(entryKey);
                     renderTable();
                 });
 
                 linkTd.appendChild(link);
                 removeTd.appendChild(removeButton);
-                tr.append(kindTd, nameTd, linkTd, removeTd);
+                tr.append(kindTd, nameTd, statusTd, linkTd, removeTd);
                 return tr;
-            }));
+            });
+            tbody.replaceChildren(...rows);
+            applySelectionHighlight();
 
             tableWrap.hidden = entries.length === 0;
             emptyMessage.hidden = entries.length !== 0;
@@ -2112,7 +2382,22 @@
         }
 
         searchInput.addEventListener('input', renderTable);
+        window.addEventListener('keydown', handleKeydown, true);
+        const initialEntries = getFavoriteEntries();
+        initialEntries.forEach(entry => {
+            latestGalleryResults.set(getFavoriteEntryKey(entry), { state: 'loading', latestId: null, lastSeenId: null });
+        });
         renderTable();
+        initialEntries.forEach(entry => {
+            fetchLatestGalleryId(entry.kind, entry.romaji).then(latestId => {
+                latestGalleryResults.set(getFavoriteEntryKey(entry), {
+                    state: 'complete',
+                    latestId,
+                    lastSeenId: getLastSeenGalleryId(entry.kind, entry.romaji)
+                });
+                refreshVisibleStatus(entry);
+            });
+        });
     }
 
     async function renderNameMapPage() {
