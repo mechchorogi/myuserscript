@@ -226,6 +226,23 @@
         navList.appendChild(li);
     }
 
+    function installNameMapNavLink() {
+        const navList = document.querySelector('.navbar nav ul');
+        if (!navList || navList.querySelector('.hitomi-tweak-name-map-nav-link')) return;
+
+        installDownloadNavLinkStyle();
+
+        const li = document.createElement('li');
+        const link = document.createElement('a');
+        link.className = 'hitomi-tweak-name-map-nav-link';
+        link.href = new URL(nameMapPagePath, location.origin).href;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = 'NAME-MAP';
+        li.appendChild(link);
+        navList.appendChild(li);
+    }
+
     function blacklistStorageKey(key) {
         return `hitomi-tweak-blacklist-${key}`;
     }
@@ -4739,6 +4756,7 @@
         installConsolidatedNavMenu();
         installDownloadNavLink();
         installFavoritesNavLink();
+        installNameMapNavLink();
 
         if (isReaderPage()) {
             installReaderProgress();
