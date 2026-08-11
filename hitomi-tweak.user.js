@@ -1512,9 +1512,14 @@
         const heading = document.querySelector('h3#artistname');
         if (!heading || heading.dataset.hitomiNameMapAnnotated) return;
 
+        const kind = location.pathname.startsWith('/artist/')
+            ? 'author'
+            : location.pathname.startsWith('/group/') ? 'group' : null;
+        if (!kind) return;
+
         const romajiText = normalizeMetadataText(heading.textContent);
         const romaji = normalizeNameMapKey(romajiText);
-        const japanese = nameMap.author?.[romaji];
+        const japanese = nameMap[kind]?.[romaji];
 
         heading.dataset.hitomiNameMapAnnotated = '1';
         heading.dataset.hitomiNameMapOriginal = romajiText;
