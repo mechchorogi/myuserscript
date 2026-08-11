@@ -4594,7 +4594,7 @@
         progressContainer.style.display = 'flex';
         progressContainer.style.flexDirection = 'column';
         progressContainer.style.alignItems = 'flex-start';
-        progressContainer.style.minWidth = '120px';
+        progressContainer.style.minWidth = '240px';
 
         const progressBar = document.createElement('div');
         progressBar.id = 'hitomi-page-progress-bar';
