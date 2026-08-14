@@ -506,7 +506,9 @@
 
     async function fetchLatestGalleryId(kind, romaji) {
         const area = kind === 'author' ? 'artist' : 'group';
-        const url = `https://ltn.gold-usergeneratedcontent.net/${area}/${encodeURIComponent(romaji)}-all.nozomi`;
+        const language = await loadPreferredLanguage();
+        const languageSegment = language === 'off' ? 'all' : language;
+        const url = `https://ltn.gold-usergeneratedcontent.net/${area}/${encodeURIComponent(romaji)}-${languageSegment}.nozomi`;
         try {
             const response = await fetch(url, { headers: { Range: 'bytes=0-3' } });
             if (!response.ok) return null;
