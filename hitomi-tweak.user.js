@@ -51,6 +51,11 @@
     const downloadPagePath = '/hitomi-tweak-download.html';
     const preferredLanguageKey = 'hitomi-tweak-preferred-language';
     const closeBookPageAfterDownloadKey = 'hitomi-tweak-close-book-page-after-download';
+    const pageCountCacheKey = 'hitomi-tweak-page-count-cache';
+    const pageCountCacheMaxEntries = 3000;
+    const pageCountFetchConcurrency = 1;
+    const pageCountFetchTimeoutMs = 10000;
+    const listPageCountBadgesEnabledKey = 'hitomi-tweak-list-page-count-badges-enabled';
     const preferredLanguageOptions = [
         ['off', 'Off'],
         ['japanese', 'Japanese'],
@@ -112,6 +117,14 @@
     let favoritesWriteQueue = Promise.resolve();
     let favoritesWatch = { version: 1, author: {}, group: {} };
     let favoritesWatchWriteQueue = Promise.resolve();
+    // Map insertion order is the eviction order; numeric-looking object keys would
+    // be reordered and could not preserve this lightweight LRU behavior.
+    let pageCountCache = new Map();
+    let pageCountCacheSaveTimer = null;
+    let activePageCountFetches = 0;
+    let pendingPageCountFetchQueue = [];
+    let pageCountFetchTargets = new Map();
+    let isListPageCountBadgesEnabled = true;
     let titleBeforeListDownloads = null;
     let unifiedDownloadsWriteQueue = Promise.resolve();
 
@@ -574,6 +587,126 @@
         const pathname = new URL(link.getAttribute('href'), location.href).pathname;
         const pathWithoutExtension = pathname.replace(/\.[^/.]+$/, '');
         return pathWithoutExtension.match(/(\d+)$/)?.[1] || null;
+    }
+
+    function normalizePageCountCache(input) {
+        const entries = Array.isArray(input) ? input : [];
+        const map = new Map();
+        for (const entry of entries) {
+            const [id, count] = Array.isArray(entry) ? entry : [];
+            const normalizedId = String(id || '').trim();
+            if (normalizedId && Number.isInteger(count) && count > 0) map.set(normalizedId, count);
+        }
+        while (map.size > pageCountCacheMaxEntries) map.delete(map.keys().next().value);
+        return map;
+    }
+
+    async function loadPageCountCache() {
+        pageCountCache = normalizePageCountCache(await GM.getValue(pageCountCacheKey, []));
+    }
+
+    function touchPageCountCache(galleryId, pageCount) {
+        pageCountCache.delete(galleryId);
+        pageCountCache.set(galleryId, pageCount);
+        if (pageCountCache.size > pageCountCacheMaxEntries) pageCountCache.delete(pageCountCache.keys().next().value);
+        schedulePageCountCacheSave();
+    }
+
+    function schedulePageCountCacheSave() {
+        clearTimeout(pageCountCacheSaveTimer);
+        pageCountCacheSaveTimer = window.setTimeout(() => {
+            GM.setValue(pageCountCacheKey, Array.from(pageCountCache.entries())).catch(() => {});
+        }, 1000);
+    }
+
+    async function fetchGalleryPageCount(galleryId) {
+        const url = `https://ltn.gold-usergeneratedcontent.net/galleries/${galleryId}.js`;
+        const response = await fetch(url, { signal: AbortSignal.timeout(pageCountFetchTimeoutMs) });
+        if (!response.ok) throw new Error(`Unexpected status ${response.status} for gallery ${galleryId}.`);
+        const text = await response.text();
+        const galleryInfo = JSON.parse(text.replace(/^\s*var\s+galleryinfo\s*=\s*/, ''));
+        if (!galleryInfo?.id || String(galleryInfo.id) !== String(galleryId) || !Array.isArray(galleryInfo.files)) {
+            throw new Error(`Could not verify galleryinfo for ${galleryId}.`);
+        }
+        return galleryInfo.files.length;
+    }
+
+    function enqueuePageCountFetch(card) {
+        const galleryId = card.dataset.hitomiPageCountGalleryId;
+        if (!galleryId) return;
+        const existingTargets = pageCountFetchTargets.get(galleryId);
+        if (existingTargets) {
+            existingTargets.add(card);
+            return;
+        }
+        pageCountFetchTargets.set(galleryId, new Set([card]));
+        pendingPageCountFetchQueue.push(galleryId);
+        pumpPageCountFetchQueue();
+    }
+
+    function pumpPageCountFetchQueue() {
+        while (activePageCountFetches < pageCountFetchConcurrency && pendingPageCountFetchQueue.length) {
+            runPageCountFetch(pendingPageCountFetchQueue.shift());
+        }
+    }
+
+    async function runPageCountFetch(galleryId) {
+        activePageCountFetches++;
+        try {
+            const pageCount = await fetchGalleryPageCount(galleryId);
+            touchPageCountCache(galleryId, pageCount);
+            for (const card of pageCountFetchTargets.get(galleryId) || []) {
+                if (!card.isConnected) continue;
+                const heading = getListCardHeading(card);
+                if (heading) renderGalleryCountBadge(heading, pageCount);
+            }
+        } catch (e) {
+            // Fetch failures stay silent and are not retried during this page session.
+        } finally {
+            activePageCountFetches--;
+            pageCountFetchTargets.delete(galleryId);
+            pumpPageCountFetchQueue();
+        }
+    }
+
+    function getListCardHeading(card) {
+        return card.querySelector(':scope > h1.lillie, :scope > h1');
+    }
+
+    function annotatePageCountBadges(root) {
+        if (!isListPageCountBadgesEnabled || !root) return;
+        for (const card of root.querySelectorAll(':scope > div')) {
+            if (card.dataset.hitomiPageCountGalleryId) continue;
+
+            const heading = getListCardHeading(card);
+            if (!heading) continue;
+
+            const galleryId = getBookIdFromElement(card);
+            if (!galleryId) continue;
+
+            card.dataset.hitomiPageCountGalleryId = galleryId;
+
+            const cachedCount = pageCountCache.get(galleryId);
+            if (cachedCount != null) {
+                card.dataset.hitomiPageCountHandled = '1';
+                renderGalleryCountBadge(heading, cachedCount);
+            }
+        }
+    }
+
+    function triggerPageCountFetchForFocusedBook(book) {
+        if (!isListPageCountBadgesEnabled || !book) return;
+        if (book.classList.contains('hitomi-folded')) return;
+        if (book.dataset.hitomiPageCountHandled) return;
+
+        const galleryId = book.dataset.hitomiPageCountGalleryId;
+        if (!galleryId) return;
+
+        const heading = getListCardHeading(book);
+        if (!heading) return;
+
+        book.dataset.hitomiPageCountHandled = '1';
+        enqueuePageCountFetch(book);
     }
 
     async function loadFoldedBookIds() {
@@ -1064,7 +1197,8 @@
                 vertical-align: 2px;
             }
 
-            h1#gallery-brand {
+            h1#gallery-brand,
+            h1.lillie {
                 position: relative;
                 padding-right: 48px;
             }
@@ -1259,10 +1393,12 @@
             if (state) {
                 this.fold();
             } else {
+                const wasFolded = this.#isFolded();
                 this.elem.classList.remove('hitomi-folded');
                 this.elem.querySelectorAll(':scope > *:not(h1.lillie):not(.hitomi-toggle)').forEach(c => {
                     c.style.display = '';
                 });
+                if (wasFolded) triggerPageCountFetchForFocusedBook(this.elem);
             }
         }
     }
@@ -1762,6 +1898,11 @@
         const toggleCheckbox = document.createElement('input');
         const toggleSwitch = document.createElement('label');
         const toggleSlider = document.createElement('span');
+        const pageCountBadgesToggleRow = document.createElement('div');
+        const pageCountBadgesToggleLabel = document.createElement('label');
+        const pageCountBadgesToggleCheckbox = document.createElement('input');
+        const pageCountBadgesToggleSwitch = document.createElement('label');
+        const pageCountBadgesToggleSlider = document.createElement('span');
 
         blocklistHeadingText.textContent = 'Blocklist';
         blocklistHeadingText.htmlFor = 'hitomi-tweak-filter-enabled-toggle';
@@ -1802,6 +1943,42 @@
         });
         blocklistHeading.append(blocklistHeadingText, toggleSwitch);
         form.appendChild(blocklistHeading);
+
+        pageCountBadgesToggleLabel.textContent = 'Page count';
+        pageCountBadgesToggleLabel.htmlFor = 'hitomi-tweak-page-count-badges-toggle';
+        Object.assign(pageCountBadgesToggleLabel.style, {
+            cursor: 'pointer',
+            userSelect: 'none'
+        });
+
+        pageCountBadgesToggleCheckbox.id = pageCountBadgesToggleLabel.htmlFor;
+        pageCountBadgesToggleCheckbox.className = 'hitomi-switch-input';
+        pageCountBadgesToggleCheckbox.type = 'checkbox';
+        pageCountBadgesToggleCheckbox.checked = isListPageCountBadgesEnabled;
+        pageCountBadgesToggleCheckbox.setAttribute('aria-label', 'Page count badges enabled');
+        pageCountBadgesToggleCheckbox.addEventListener('change', () => {
+            isListPageCountBadgesEnabled = pageCountBadgesToggleCheckbox.checked;
+            GM.setValue(listPageCountBadgesEnabledKey, isListPageCountBadgesEnabled).catch(() => {});
+            if (isListPageCountBadgesEnabled) {
+                document.querySelectorAll('div.gallery-content').forEach(gallery => annotatePageCountBadges(gallery));
+            }
+        });
+
+        pageCountBadgesToggleSwitch.className = 'hitomi-switch';
+        pageCountBadgesToggleSwitch.htmlFor = pageCountBadgesToggleCheckbox.id;
+        pageCountBadgesToggleSlider.className = 'hitomi-switch-slider';
+        pageCountBadgesToggleSwitch.append(pageCountBadgesToggleCheckbox, pageCountBadgesToggleSlider);
+
+        Object.assign(pageCountBadgesToggleRow.style, {
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '10px',
+            fontWeight: 'bold',
+            marginTop: '8px'
+        });
+        pageCountBadgesToggleRow.append(pageCountBadgesToggleLabel, pageCountBadgesToggleSwitch);
+        form.insertBefore(pageCountBadgesToggleRow, blocklistHeading);
 
         for (const key of blacklistKeys) {
             const label = document.createElement('label');
@@ -2042,6 +2219,7 @@
                 filter(currentBlackList);
                 annotateNameMapLinks(gallery);
                 annotateArtistPageHeading();
+                annotatePageCountBadges(gallery);
                 refreshDownloadIndicators().catch(() => {});
             }
         });
@@ -2052,6 +2230,7 @@
             filter(blackList);
             annotateNameMapLinks(gallery);
             annotateArtistPageHeading();
+            annotatePageCountBadges(gallery);
             refreshDownloadIndicators().catch(() => {});
         }
     }
@@ -2071,6 +2250,8 @@
 
     async function installFilter() {
         await loadFoldedBookIds();
+        isListPageCountBadgesEnabled = await GM.getValue(listPageCountBadgesEnabledKey, true);
+        await loadPageCountCache();
         await createFilterUI();
         const blackList = await loadBlacklist();
         observeGallery(blackList);
@@ -4642,6 +4823,7 @@
         focusedBook = book;
         focusedBook.classList.add(focusedBookClassName);
         scrollBookIntoViewIfNeeded(focusedBook);
+        triggerPageCountFetchForFocusedBook(book);
     }
 
     function getFocusedBook() {
