@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto redirection
 // @namespace    http://tampermonkey.net/
-// @version      1.0.0
+// @version      1.1.0
 // @description  Unified script to handle automatic redirection/click for various sites
 // @author       mechchorogi
 // @match        http://www.pinktower.com/*
