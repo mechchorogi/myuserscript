@@ -5286,6 +5286,20 @@
             hideTooltip();
         });
 
+        document.addEventListener('keydown', event => {
+            if (isEditableTarget(event.target)) return;
+            if (!event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+
+            if (event.key === 'a') {
+                event.preventDefault();
+                commitNavigation(1);
+            } else if (event.key === 'e') {
+                event.preventDefault();
+                const total = document.querySelector('#single-page-select')?.options.length || 1;
+                commitNavigation(total);
+            }
+        });
+
         function updateProgress() {
             const select = document.querySelector('#single-page-select');
             if (!select || select.options.length === 0) return;
