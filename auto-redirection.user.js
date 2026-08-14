@@ -16,6 +16,7 @@
 // @match        http://newmofu.doorblog.jp/*
 // @match        https://imgur.com/*
 // @match        https://giko-antenna.com/*
+// @match        https://www.google.com/url?q=https://*
 // @grant        none
 // ==/UserScript==
 
@@ -131,5 +132,9 @@
         case 'giko-antenna.com':
             click('a.article_link');
             break;
+        case 'www.google.com': {
+            click('body > div > a');
+            break;
+        }
     }
 })();
