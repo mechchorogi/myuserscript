@@ -70,6 +70,7 @@
     const bookDownloadProgressLabelClassName = 'hitomi-tweak-book-download-progress-label';
     const bookPageProgressLabelClassName = 'hitomi-tweak-book-page-progress-label';
     const downloadedBookHeadingClassName = 'hitomi-tweak-downloaded-book-heading';
+    const pageCountBadgeClassName = 'hitomi-tweak-page-count-badge';
     const downloadCanceledErrorName = 'HitomiTweakDownloadCanceled';
     const downloadAnimeNotSupportedErrorName = 'HitomiTweakDownloadAnimeNotSupported';
     const focusedBookClassName = 'hitomi-tweak-focused-book';
@@ -1061,6 +1062,24 @@
                 color: #2563eb;
                 font: 700 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
                 vertical-align: 2px;
+            }
+
+            h1#gallery-brand {
+                position: relative;
+                padding-right: 48px;
+            }
+
+            .${pageCountBadgeClassName} {
+                position: absolute;
+                top: 50%;
+                right: 8px;
+                transform: translateY(-50%);
+                padding: 2px 6px;
+                background: #999999;
+                color: #fff;
+                border-radius: 4px;
+                font-size: 12px;
+                font-weight: bold;
             }
         `;
         document.head.appendChild(style);
@@ -3761,6 +3780,26 @@
         });
     }
 
+    function createPageCountBadgeElement(pageCount) {
+        const badge = document.createElement('span');
+        badge.className = pageCountBadgeClassName;
+        badge.textContent = `${pageCount}P`;
+        return badge;
+    }
+
+    function renderGalleryCountBadge(heading, pageCount) {
+        if (!heading || heading.dataset.hitomiPageCountAnnotated || !(pageCount > 0)) return;
+        heading.dataset.hitomiPageCountAnnotated = '1';
+        heading.appendChild(createPageCountBadgeElement(pageCount));
+    }
+
+    function renderBookPageGalleryCountBadge(galleryInfo, galleryId) {
+        if (!galleryInfo?.id || String(galleryInfo.id) !== String(galleryId)) return;
+        const pageCount = Array.isArray(galleryInfo.files) ? galleryInfo.files.length : 0;
+        if (!pageCount) return;
+        renderGalleryCountBadge(document.querySelector('h1#gallery-brand'), pageCount);
+    }
+
     function getBookPageTitle(root, galleryInfo, galleryId) {
         // Prefer ID-verified galleryinfo so stale SPA DOM or neighboring list cards cannot leak metadata.
         // The DOM remains a fallback for pages where galleryinfo is not available yet.
@@ -3980,8 +4019,9 @@
         try {
             const galleryInfo = await loadCurrentBookPageGalleryInfo(galleryId);
             await harvestNameMapKeys(galleryInfo);
+            renderBookPageGalleryCountBadge(galleryInfo, galleryId);
         } catch (e) {
-            // Name-map harvesting is best-effort and must not affect page setup.
+            // Name-map harvesting and the page-count badge are both best-effort and must not affect page setup.
         }
     }
 
