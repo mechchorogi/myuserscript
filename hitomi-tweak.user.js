@@ -90,6 +90,7 @@
     const keyboardShortcuts = [
         ['/', 'Toggle this help'],
         ['a', 'Open author link'],
+        ['s', 'Favorite all authors of focused book'],
         ['b', 'Toggle blocklist mode'],
         ['d', 'Download current book (up to 4 on list pages)'],
         ['j', 'Focus next book'],
@@ -4861,15 +4862,82 @@
         }
     }
 
-    function openAuthorLinks() {
+    function getFocusedBookAuthorLinks() {
         const book = getFocusedBook();
-        const links = book?.matches('div.gallery-content > div')
+        return book?.matches('div.gallery-content > div')
             ? book.querySelectorAll(':scope div.artist-list li a[href]')
             : document.querySelectorAll('h2#artists > ul > li > a[href]');
+    }
+
+    function openAuthorLinks() {
+        const links = getFocusedBookAuthorLinks();
         const urls = [...new Set(Array.from(links, link => new URL(link.getAttribute('href'), location.href).href))];
         if (urls.length === 0) return false;
 
         urls.forEach(openUrlInNewTab);
+        return true;
+    }
+
+    function favoriteAuthorsOfFocusedBook() {
+        const links = Array.from(getFocusedBookAuthorLinks());
+        if (links.length === 0) return false;
+
+        const entries = links
+            .map(link => ({
+                link,
+                romaji: normalizeNameMapKey(link.dataset.hitomiNameMapOriginal || normalizeMetadataText(link.textContent))
+            }))
+            .filter(entry => entry.romaji);
+        if (entries.length === 0) return false;
+
+        const romajiSet = [...new Set(entries.map(entry => entry.romaji))];
+        const allFavorited = romajiSet.every(romaji => isFavorite('author', romaji));
+        const nextFavorited = !allFavorited;
+
+        updateFavorites(map => {
+            const changed = [];
+            romajiSet.forEach(romaji => {
+                if (nextFavorited) {
+                    if (map.author[romaji] !== true) {
+                        map.author[romaji] = true;
+                        changed.push(romaji);
+                    }
+                } else if (map.author[romaji] === true) {
+                    delete map.author[romaji];
+                    changed.push(romaji);
+                }
+            });
+            return changed;
+        }).then(changed => {
+            entries.forEach(({ link }) => {
+                const star = link.previousElementSibling;
+                if (star?.matches('.hitomi-tweak-favorite-star') && star.dataset.hitomiFavoriteKind === 'author') {
+                    star.classList.toggle('is-favorited', nextFavorited);
+                }
+            });
+
+            if (nextFavorited) {
+                changed.forEach(romaji => {
+                    fetchLatestGalleryId('author', romaji).then(latestId => {
+                        if (!isFavorite('author', romaji) || !Number.isInteger(latestId) || latestId <= 0) return;
+                        return updateFavoritesWatch(map => {
+                            map.author[romaji] = latestId;
+                            return true;
+                        });
+                    }).catch(() => {});
+                });
+            } else {
+                changed.forEach(romaji => {
+                    updateFavoritesWatch(map => {
+                        delete map.author[romaji];
+                        return true;
+                    }).catch(() => {});
+                });
+            }
+        }).catch(error => {
+            console.error('Failed to update favorites.', error);
+        });
+
         return true;
     }
 
@@ -4993,7 +5061,7 @@
     function handleGlobalKeydown(e) {
         // Global shortcuts are plain-key only so browser/system shortcuts and text
         // entry fields keep their native behavior.
-        if (!['/', 'a', 'b', 'c', 'd', 'j', 'k', 'r', 't', 'v'].includes(e.key) || !hasPlainModifierState(e)) return;
+        if (!['/', 'a', 'b', 'c', 'd', 'j', 'k', 'r', 's', 't', 'v'].includes(e.key) || !hasPlainModifierState(e)) return;
         if (isEditableTarget(e.target)) return;
 
         if (e.key === '/') {
@@ -5014,6 +5082,14 @@
         if (e.key === 'a') {
             if (isReaderPage()) return;
             if (openAuthorLinks()) {
+                e.preventDefault();
+            }
+            return;
+        }
+
+        if (e.key === 's') {
+            if (isReaderPage()) return;
+            if (favoriteAuthorsOfFocusedBook()) {
                 e.preventDefault();
             }
             return;
