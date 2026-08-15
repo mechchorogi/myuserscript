@@ -76,6 +76,7 @@
     const bookPageProgressLabelClassName = 'hitomi-tweak-book-page-progress-label';
     const downloadedBookHeadingClassName = 'hitomi-tweak-downloaded-book-heading';
     const pageCountBadgeClassName = 'hitomi-tweak-page-count-badge';
+    const downloadedAtLabelClassName = 'hitomi-tweak-downloaded-at-label';
     const downloadCanceledErrorName = 'HitomiTweakDownloadCanceled';
     const downloadAnimeNotSupportedErrorName = 'HitomiTweakDownloadAnimeNotSupported';
     const focusedBookClassName = 'hitomi-tweak-focused-book';
@@ -1187,26 +1188,13 @@
                 to { background-position: 16.97px 0; }
             }
 
-            h1.lillie.${downloadedBookHeadingClassName}::before {
-                content: "✓";
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
-                width: 18px;
-                height: 18px;
-                margin-right: 6px;
-                border: 1px solid rgba(37, 99, 235, 0.42);
-                border-radius: 50%;
-                background: rgba(59, 130, 246, 0.16);
-                color: #2563eb;
-                font: 700 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-                vertical-align: 2px;
-            }
-
             h1#gallery-brand,
             h1.lillie {
                 position: relative;
                 padding-right: 48px;
+                display: flex;
+                align-items: center;
+                flex-wrap: wrap;
             }
 
             .${pageCountBadgeClassName} {
@@ -1220,6 +1208,21 @@
                 border-radius: 4px;
                 font-size: 12px;
                 font-weight: bold;
+            }
+
+            .${downloadedAtLabelClassName} {
+                margin-left: 6px;
+                color: #555555;
+                font-size: 11px;
+                font-weight: normal;
+                text-shadow: none;
+                line-height: 1;
+            }
+
+            .${downloadedAtLabelClassName}::before {
+                content: "✓ ";
+                color: #2563eb;
+                font-weight: 700;
             }
         `;
         document.head.appendChild(style);
@@ -3827,8 +3830,8 @@
         });
     }
 
-    function recordUnifiedDownloadDone({ galleryId, url, title, group, author, source, metadataHydrated }) {
-        const now = new Date().toISOString();
+    function recordUnifiedDownloadDone({ galleryId, url, title, group, author, source, metadataHydrated, downloadedAt }) {
+        const now = downloadedAt || new Date().toISOString();
         return upsertUnifiedDownload(galleryId, item => ({
             status: 'done',
             downloadedAt: now,
@@ -4144,6 +4147,50 @@
         return elem?.querySelector(':scope > h1.lillie a[href], :scope > h1 a[href], :scope > a[href]') || null;
     }
 
+    function formatDownloadedAtFixed(value) {
+        if (!value) return '';
+
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return '';
+
+        const pad = n => String(n).padStart(2, '0');
+        return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} `
+            + `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+    }
+
+    function createDownloadedAtLabelElement(downloadedAt) {
+        const label = document.createElement('span');
+        label.className = downloadedAtLabelClassName;
+        label.textContent = formatDownloadedAtFixed(downloadedAt);
+        return label;
+    }
+
+    function renderDownloadedAtLabel(heading, downloadedAt) {
+        if (!heading || !downloadedAt) return;
+
+        const formatted = formatDownloadedAtFixed(downloadedAt);
+        if (!formatted) return;
+
+        const existing = heading.querySelector(`:scope > .${downloadedAtLabelClassName}`);
+        if (existing) {
+            if (heading.dataset.hitomiDownloadedAtAnnotated === downloadedAt) return;
+            existing.textContent = formatted;
+        } else {
+            heading.appendChild(createDownloadedAtLabelElement(downloadedAt));
+        }
+        heading.dataset.hitomiDownloadedAtAnnotated = downloadedAt;
+    }
+
+    function watchDownloadedAtLabelRehydration(heading, downloadedAt) {
+        if (!heading) return;
+
+        const observer = new MutationObserver(() => {
+            renderDownloadedAtLabel(heading, downloadedAt);
+        });
+        observer.observe(heading, { childList: true });
+        window.setTimeout(() => observer.disconnect(), 5000);
+    }
+
     function setBookDownloadedIndicator(book, downloaded) {
         const heading = book.querySelector(':scope > h1.lillie');
         if (!heading) return;
@@ -4151,31 +4198,35 @@
         heading.classList.toggle(downloadedBookHeadingClassName, downloaded);
     }
 
-    function applyDownloadedIdsToBooks(downloadedIds) {
+    function applyDownloadedInfoToBooks(downloadedAtByGalleryId) {
         // Downloaded markers are derived from the unified model used on book pages.
         // Downloaded books are folded visually to keep list pages compact, but this
         // does not write foldedBookIds because it is download-record-driven state.
         document.querySelectorAll('div.gallery-content > div').forEach(book => {
             const bookId = getBookIdFromElement(book);
-            const downloaded = Boolean(bookId && downloadedIds.has(String(bookId)));
+            const downloaded = Boolean(bookId && downloadedAtByGalleryId.has(String(bookId)));
 
             setBookDownloadedIndicator(book, downloaded);
             if (downloaded) {
                 getFilterBook(book).fold();
+
+                const downloadedAt = downloadedAtByGalleryId.get(String(bookId));
+                if (downloadedAt) renderDownloadedAtLabel(getListCardHeading(book), downloadedAt);
             }
         });
     }
 
     async function refreshDownloadIndicators() {
         const model = await loadUnifiedDownloads();
-        const downloadedIds = new Set(model.items
+        const downloadedAtByGalleryId = new Map(model.items
             .filter(item => item.status === 'done' || item.downloadedAt)
-            .map(item => String(item.galleryId)));
-        applyDownloadedIdsToBooks(downloadedIds);
+            .map(item => [String(item.galleryId), item.downloadedAt || '']));
+        applyDownloadedInfoToBooks(downloadedAtByGalleryId);
     }
 
     function markCurrentBookDownloaded(galleryInfo = null, galleryId = getCurrentGalleryId()) {
         const metadata = getDownloadHistoryMetadata(document, galleryInfo, galleryId);
+        const downloadedAt = new Date().toISOString();
         recordUnifiedDownloadDone({
             galleryId: String(galleryId),
             url: location.href,
@@ -4183,19 +4234,20 @@
             group: metadata.group,
             author: metadata.author,
             source: 'book',
-            metadataHydrated: metadata.metadataHydrated
+            metadataHydrated: metadata.metadataHydrated,
+            downloadedAt
         }).catch(() => {});
 
         markDLButtonDownloaded();
+        renderDownloadedAtLabel(document.querySelector('h1#gallery-brand'), downloadedAt);
     }
 
     function markListBookDownloaded(book, galleryInfo) {
         if (!book) return;
 
-        // List-page downloads should immediately affect the visible card so users do
-        // not need a reload to see the downloaded marker and compact folded state.
         const link = getBookLinkFromElement(book);
         const metadata = getDownloadHistoryMetadata(document, galleryInfo, galleryInfo.id);
+        const downloadedAt = new Date().toISOString();
         recordUnifiedDownloadDone({
             galleryId: String(galleryInfo.id),
             url: link ? new URL(link.getAttribute('href'), location.href).href : '',
@@ -4203,22 +4255,28 @@
             group: metadata.group,
             author: metadata.author,
             source: 'list',
-            metadataHydrated: metadata.metadataHydrated
+            metadataHydrated: metadata.metadataHydrated,
+            downloadedAt
         }).catch(() => {});
 
         setBookDownloadedIndicator(book, true);
         getFilterBook(book).fold();
+        renderDownloadedAtLabel(getListCardHeading(book), downloadedAt);
     }
 
     async function markPageIfDownloaded() {
         if (!getDLButton()) return;
 
         const model = await loadUnifiedDownloads();
-        if (model.items.some(item =>
+        const item = model.items.find(item =>
             String(item.galleryId) === String(getCurrentGalleryId())
             && (item.status === 'done' || item.downloadedAt)
-        )) {
+        );
+        if (item) {
             markDLButtonDownloaded();
+            const heading = document.querySelector('h1#gallery-brand');
+            renderDownloadedAtLabel(heading, item.downloadedAt);
+            watchDownloadedAtLabelRehydration(heading, item.downloadedAt);
         }
     }
 
