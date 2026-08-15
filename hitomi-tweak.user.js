@@ -127,6 +127,7 @@
     let pageCountFetchTargets = new Map();
     let isListPageCountBadgesEnabled = true;
     let titleBeforeListDownloads = null;
+    let titleBeforeBookPageDownloadTitle = null;
     let unifiedDownloadsWriteQueue = Promise.resolve();
 
     function isReaderPage() {
@@ -4319,10 +4320,13 @@
         try {
             showBookPageDownloadProgress();
             updateBookPageDownloadProgress(0, 'Loading...');
+            updateBookPageDownloadTitle(0);
             const galleryInfo = await buildAndSaveGalleryArchive(galleryId, downloadState, (text, percent) => {
                 updateBookPageDownloadProgress(percent, text);
+                updateBookPageDownloadTitle(percent);
             });
             hideBookPageDownloadProgress();
+            updateBookPageDownloadTitle(null);
             markCurrentBookDownloaded(galleryInfo, galleryId);
             if (await loadCloseBookPageAfterDownload()) closeCurrentTab();
             return true;
@@ -4331,6 +4335,7 @@
             const animeNotSupported = isAnimeNotSupportedError(e);
             if (!canceled && !animeNotSupported) console.error(e);
             hideBookPageDownloadProgress();
+            updateBookPageDownloadTitle(null);
             setDLButtonText(canceled ? 'CANCELED' : animeNotSupported ? 'ANIME NOT SUPPORTED' : 'DOWNLOAD FAILED');
             restoreDLButtonTextWhenIdle(downloadState, 1800);
             return false;
@@ -4750,6 +4755,19 @@
             document.title = titleBeforeListDownloads;
             titleBeforeListDownloads = null;
         }
+    }
+
+    function updateBookPageDownloadTitle(percent) {
+        if (percent === null) {
+            if (titleBeforeBookPageDownloadTitle !== null) {
+                document.title = titleBeforeBookPageDownloadTitle;
+                titleBeforeBookPageDownloadTitle = null;
+            }
+            return;
+        }
+
+        titleBeforeBookPageDownloadTitle ||= document.title.replace(/^\[\d+%\]\s*/, '');
+        document.title = `[${Math.round(percent)}%] ${titleBeforeBookPageDownloadTitle}`;
     }
 
     function cancelListDownload(downloadState) {
