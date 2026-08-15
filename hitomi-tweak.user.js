@@ -114,9 +114,9 @@
     let listDownloadProgressStack = null;
     let nameMap = { version: 1, group: {}, author: {}, series: {} };
     let nameMapWriteQueue = Promise.resolve();
-    let favorites = { version: 1, author: {}, group: {} };
+    let favorites = { version: 1, author: {}, group: {}, tag: {} };
     let favoritesWriteQueue = Promise.resolve();
-    let favoritesWatch = { version: 1, author: {}, group: {} };
+    let favoritesWatch = { version: 1, author: {}, group: {}, tag: {} };
     let favoritesWatchWriteQueue = Promise.resolve();
     // Map insertion order is the eviction order; numeric-looking object keys would
     // be reordered and could not preserve this lightweight LRU behavior.
@@ -356,9 +356,10 @@
             throw new Error('Invalid favorites format');
         }
 
-        const normalized = { version: 1, author: {}, group: {} };
-        for (const kind of ['author', 'group']) {
-            for (const [key, value] of Object.entries(input[kind])) {
+        const normalized = { version: 1, author: {}, group: {}, tag: {} };
+        for (const kind of ['author', 'group', 'tag']) {
+            const source = isPlainObject(input[kind]) ? input[kind] : {};
+            for (const [key, value] of Object.entries(source)) {
                 const normalizedKey = normalizeNameMapKey(key);
                 // Favorites are boolean flags; discard malformed persisted values.
                 if (normalizedKey && value === true) normalized[kind][normalizedKey] = true;
@@ -371,7 +372,7 @@
         try {
             return normalizeFavorites(JSON.parse(localStorage.getItem(favoritesKey) || 'null'));
         } catch (e) {
-            return { version: 1, author: {}, group: {} };
+            return { version: 1, author: {}, group: {}, tag: {} };
         }
     }
 
@@ -433,9 +434,10 @@
             throw new Error('Invalid favorites watch format');
         }
 
-        const normalized = { version: 1, author: {}, group: {} };
-        for (const kind of ['author', 'group']) {
-            for (const [key, value] of Object.entries(input[kind])) {
+        const normalized = { version: 1, author: {}, group: {}, tag: {} };
+        for (const kind of ['author', 'group', 'tag']) {
+            const source = isPlainObject(input[kind]) ? input[kind] : {};
+            for (const [key, value] of Object.entries(source)) {
                 const normalizedKey = normalizeNameMapKey(key);
                 if (normalizedKey && Number.isInteger(value) && value > 0) normalized[kind][normalizedKey] = value;
             }
@@ -447,7 +449,7 @@
         try {
             return normalizeFavoritesWatch(JSON.parse(localStorage.getItem(favoritesWatchKey) || 'null'));
         } catch (e) {
-            return { version: 1, author: {}, group: {} };
+            return { version: 1, author: {}, group: {}, tag: {} };
         }
     }
 
@@ -505,7 +507,7 @@
     }
 
     async function fetchLatestGalleryId(kind, romaji) {
-        const area = kind === 'author' ? 'artist' : 'group';
+        const area = kind === 'author' ? 'artist' : kind === 'tag' ? 'tag' : 'group';
         const language = await loadPreferredLanguage();
         const languageSegment = language === 'off' ? 'all' : language;
         const url = `https://ltn.gold-usergeneratedcontent.net/${area}/${encodeURIComponent(romaji)}-${languageSegment}.nozomi`;
@@ -840,7 +842,7 @@
 
             .hitomi-tweak-favorite-star svg path {
                 fill: none;
-                stroke: currentColor;
+                stroke: #888;
                 stroke-width: 1.5;
             }
 
@@ -1572,6 +1574,32 @@
         return null;
     }
 
+    function getTagIdentifierFromLink(link) {
+        const href = link.getAttribute('href') || '';
+        const match = href.match(/^\/tag\/(.+)-all\.html$/);
+        if (!match) return null;
+        try {
+            return decodeURIComponent(match[1]);
+        } catch (e) {
+            return match[1];
+        }
+    }
+
+    function insertFavoriteStar(link, kind, romaji, label) {
+        if (link.dataset.hitomiFavoriteAnnotated) return;
+        const favoriteButton = document.createElement('button');
+        favoriteButton.type = 'button';
+        favoriteButton.className = 'hitomi-tweak-favorite-star';
+        favoriteButton.title = `Toggle favorite for ${label}`;
+        favoriteButton.setAttribute('aria-label', `Toggle favorite for ${label}`);
+        favoriteButton.dataset.hitomiFavoriteKind = kind;
+        favoriteButton.dataset.hitomiFavoriteRomaji = romaji;
+        favoriteButton.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M12 .587l3.668 7.568L24 9.306l-6.064 5.828 1.48 8.279L12 19.771l-7.416 3.642 1.48-8.279L0 9.306l8.332-1.151Z"/></svg>';
+        favoriteButton.classList.toggle('is-favorited', isFavorite(kind, romaji));
+        link.dataset.hitomiFavoriteAnnotated = '1';
+        link.insertAdjacentElement('beforebegin', favoriteButton);
+    }
+
     function annotateNameMapLinks(root) {
         // Unlike blacklist matching/highlighting, this only rewrites a link's own label
         // based on its own href+text, so it is safe to also annotate the "related
@@ -1579,22 +1607,19 @@
         if (!root) return;
         root.querySelectorAll('a[href]').forEach(link => {
             const kind = getNameMapKindFromLink(link);
-            if (!kind) return;
+
+            if (!kind) {
+                if (getBlacklistKeyFromLink(link) === 'tag') {
+                    const tagIdentifier = getTagIdentifierFromLink(link);
+                    if (tagIdentifier) insertFavoriteStar(link, 'tag', normalizeNameMapKey(tagIdentifier), tagIdentifier);
+                }
+                return;
+            }
 
             const romajiText = link.dataset.hitomiNameMapOriginal || normalizeMetadataText(link.textContent);
             const romaji = normalizeNameMapKey(romajiText);
-            if ((kind === 'author' || kind === 'group') && !link.dataset.hitomiFavoriteAnnotated) {
-                const favoriteButton = document.createElement('button');
-                favoriteButton.type = 'button';
-                favoriteButton.className = 'hitomi-tweak-favorite-star';
-                favoriteButton.title = `Toggle favorite for ${romajiText}`;
-                favoriteButton.setAttribute('aria-label', `Toggle favorite for ${romajiText}`);
-                favoriteButton.dataset.hitomiFavoriteKind = kind;
-                favoriteButton.dataset.hitomiFavoriteRomaji = romaji;
-                favoriteButton.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M12 .587l3.668 7.568L24 9.306l-6.064 5.828 1.48 8.279L12 19.771l-7.416 3.642 1.48-8.279L0 9.306l8.332-1.151Z"/></svg>';
-                favoriteButton.classList.toggle('is-favorited', isFavorite(kind, romaji));
-                link.dataset.hitomiFavoriteAnnotated = '1';
-                link.insertAdjacentElement('beforebegin', favoriteButton);
+            if (kind === 'author' || kind === 'group') {
+                insertFavoriteStar(link, kind, romaji, romajiText);
             }
 
             if (link.dataset.hitomiNameMapAnnotated) return;
@@ -1710,7 +1735,7 @@
 
             const kind = button.dataset.hitomiFavoriteKind;
             const romaji = button.dataset.hitomiFavoriteRomaji;
-            if ((kind !== 'author' && kind !== 'group') || !romaji) return;
+            if ((kind !== 'author' && kind !== 'group' && kind !== 'tag') || !romaji) return;
 
             try {
                 const favorited = await updateFavorites(map => {
@@ -2461,7 +2486,7 @@
         }
 
         function openFavoriteInBackground(entry) {
-            const hitomiCategoryPath = entry.kind === 'author' ? 'artist' : 'group';
+            const hitomiCategoryPath = entry.kind === 'author' ? 'artist' : entry.kind === 'tag' ? 'tag' : 'group';
             const url = `https://hitomi.la/${hitomiCategoryPath}/${encodeURIComponent(entry.romaji)}-all.html`;
             if (typeof GM !== 'undefined' && typeof GM.openInTab === 'function') {
                 GM.openInTab(url, { active: false, insert: true, setParent: false });
@@ -2474,7 +2499,7 @@
         }
 
         function getFavoriteEntries() {
-            return ['author', 'group']
+            return ['author', 'group', 'tag']
                 .flatMap(kind => Object.keys(favorites[kind] || {}).map(romaji => ({ kind, romaji })))
                 .sort((a, b) => a.kind.localeCompare(b.kind)
                     || a.romaji.localeCompare(b.romaji, undefined, { numeric: true, sensitivity: 'base' }));
@@ -2542,7 +2567,7 @@
                 const link = document.createElement('a');
                 const removeButton = document.createElement('button');
                 const japanese = nameMap[entry.kind]?.[entry.romaji];
-                const hitomiCategoryPath = entry.kind === 'author' ? 'artist' : 'group';
+                const hitomiCategoryPath = entry.kind === 'author' ? 'artist' : entry.kind === 'tag' ? 'tag' : 'group';
                 const entryKey = getFavoriteEntryKey(entry);
 
                 tr.tabIndex = -1;
