@@ -662,10 +662,12 @@
         try {
             const pageCount = await fetchGalleryPageCount(galleryId);
             touchPageCountCache(galleryId, pageCount);
-            for (const card of pageCountFetchTargets.get(galleryId) || []) {
-                if (!card.isConnected) continue;
-                const heading = getListCardHeading(card);
-                if (heading) renderGalleryCountBadge(heading, pageCount);
+            if (isListPageCountBadgesEnabled) {
+                for (const card of pageCountFetchTargets.get(galleryId) || []) {
+                    if (!card.isConnected) continue;
+                    const heading = getListCardHeading(card);
+                    if (heading) renderGalleryCountBadge(heading, pageCount);
+                }
             }
         } catch (e) {
             // Fetch failures stay silent and are not retried during this page session.
@@ -1954,6 +1956,8 @@
                 loadBlacklist().then(refreshFilter);
             } else {
                 clearFilter();
+                clearBookPageBlacklistHighlights();
+                refreshDownloadIndicators().catch(() => {});
             }
         });
 
@@ -1993,6 +1997,16 @@
             GM.setValue(listPageCountBadgesEnabledKey, isListPageCountBadgesEnabled).catch(() => {});
             if (isListPageCountBadgesEnabled) {
                 document.querySelectorAll('div.gallery-content').forEach(gallery => annotatePageCountBadges(gallery));
+            } else {
+                document.querySelectorAll('div.gallery-content > div').forEach(card => {
+                    delete card.dataset.hitomiPageCountGalleryId;
+                    delete card.dataset.hitomiPageCountHandled;
+                    const heading = getListCardHeading(card);
+                    if (heading) {
+                        delete heading.dataset.hitomiPageCountAnnotated;
+                        heading.querySelector(`:scope > .${pageCountBadgeClassName}`)?.remove();
+                    }
+                });
             }
         });
 
@@ -3737,7 +3751,10 @@
         galleryIds.forEach(galleryId => {
             const historyRecord = historyRecords.get(galleryId);
             const unifiedRecord = unifiedRecords.get(galleryId);
-            const downloadedAt = historyRecord?.downloadedAt || unifiedRecord?.downloadedAt || '';
+            const downloadedAt = [historyRecord?.downloadedAt, unifiedRecord?.downloadedAt]
+                .filter(Boolean)
+                .sort()
+                .pop() || '';
 
             // Ignore unfinished records left by queue-enabled versions; no worker remains to resolve them.
             if (!downloadedAt && unifiedRecord?.status !== 'done' && !historyRecord) return;
@@ -4224,10 +4241,14 @@
         applyDownloadedInfoToBooks(downloadedAtByGalleryId);
     }
 
-    function markCurrentBookDownloaded(galleryInfo = null, galleryId = getCurrentGalleryId()) {
+    async function markCurrentBookDownloaded(galleryInfo = null, galleryId = getCurrentGalleryId()) {
         const metadata = getDownloadHistoryMetadata(document, galleryInfo, galleryId);
         const downloadedAt = new Date().toISOString();
-        recordUnifiedDownloadDone({
+
+        markDLButtonDownloaded();
+        renderDownloadedAtLabel(document.querySelector('h1#gallery-brand'), downloadedAt);
+
+        await recordUnifiedDownloadDone({
             galleryId: String(galleryId),
             url: location.href,
             title: metadata.title,
@@ -4237,9 +4258,6 @@
             metadataHydrated: metadata.metadataHydrated,
             downloadedAt
         }).catch(() => {});
-
-        markDLButtonDownloaded();
-        renderDownloadedAtLabel(document.querySelector('h1#gallery-brand'), downloadedAt);
     }
 
     function markListBookDownloaded(book, galleryInfo) {
@@ -4385,7 +4403,7 @@
             });
             hideBookPageDownloadProgress();
             updateBookPageDownloadTitle(null);
-            markCurrentBookDownloaded(galleryInfo, galleryId);
+            await markCurrentBookDownloaded(galleryInfo, galleryId);
             if (await loadCloseBookPageAfterDownload()) closeCurrentTab();
             return true;
         } catch (e) {
