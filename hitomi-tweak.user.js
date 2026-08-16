@@ -114,11 +114,8 @@
     let listDownloadNotice = null;
     let listDownloadProgressStack = null;
     let nameMap = { version: 1, group: {}, author: {}, series: {} };
-    let nameMapWriteQueue = Promise.resolve();
     let favorites = { version: 1, author: {}, group: {}, tag: {} };
-    let favoritesWriteQueue = Promise.resolve();
     let favoritesWatch = { version: 1, author: {}, group: {}, tag: {} };
-    let favoritesWatchWriteQueue = Promise.resolve();
     // Map insertion order is the eviction order; numeric-looking object keys would
     // be reordered and could not preserve this lightweight LRU behavior.
     let pageCountCache = new Map();
@@ -276,6 +273,66 @@
         return value && typeof value === 'object' && !Array.isArray(value);
     }
 
+    function createMirroredStore({ key, lockName, normalize, createDefault, setState }) {
+        let queue = Promise.resolve();
+
+        function loadLocal() {
+            try {
+                return normalize(JSON.parse(localStorage.getItem(key) || 'null'));
+            } catch (e) {
+                return createDefault();
+            }
+        }
+
+        function saveLocal(value) {
+            try {
+                localStorage.setItem(key, JSON.stringify(value));
+            } catch (e) {
+                // Local mirroring is best-effort; GM storage remains the canonical copy.
+            }
+        }
+
+        async function load() {
+            const localValue = loadLocal();
+            let value;
+            try {
+                value = normalize(await GM.getValue(key, localValue));
+            } catch (e) {
+                value = localValue;
+            }
+            saveLocal(value);
+            setState(value);
+            return value;
+        }
+
+        async function save(value) {
+            const normalized = normalize(value);
+            saveLocal(normalized);
+            await GM.setValue(key, normalized);
+            setState(normalized);
+            return normalized;
+        }
+
+        function withLock(task) {
+            if (navigator.locks?.request) return navigator.locks.request(lockName, async () => task());
+            const next = queue.then(task, task);
+            queue = next.catch(() => {});
+            return next;
+        }
+
+        async function update(mutator) {
+            return withLock(async () => {
+                const fresh = normalize(await GM.getValue(key, loadLocal()));
+                const before = JSON.stringify(fresh);
+                const result = await mutator(fresh);
+                if (JSON.stringify(fresh) !== before) await save(fresh);
+                return result;
+            });
+        }
+
+        return { load, save, update, loadLocal, saveLocal, withLock };
+    }
+
     function normalizeNameMap(input) {
         if (!isPlainObject(input) || input.version !== 1 || !isPlainObject(input.group) || !isPlainObject(input.author)) {
             throw new Error('Invalid name map format');
@@ -296,62 +353,19 @@
         return normalized;
     }
 
-    function loadLocalNameMap() {
-        try {
-            return normalizeNameMap(JSON.parse(localStorage.getItem(nameMapKey) || 'null'));
-        } catch (e) {
-            return { version: 1, group: {}, author: {}, series: {} };
-        }
-    }
-
-    function saveLocalNameMap(map) {
-        try {
-            localStorage.setItem(nameMapKey, JSON.stringify(map));
-        } catch (e) {
-            // Name-map mirroring is best-effort; GM storage remains the canonical copy.
-        }
-    }
-
-    async function loadNameMap() {
-        const localMap = loadLocalNameMap();
-        try {
-            nameMap = normalizeNameMap(await GM.getValue(nameMapKey, localMap));
-        } catch (e) {
-            nameMap = localMap;
-        }
-        saveLocalNameMap(nameMap);
-        return nameMap;
-    }
-
-    async function saveNameMap(map) {
-        nameMap = normalizeNameMap(map);
-        saveLocalNameMap(nameMap);
-        await GM.setValue(nameMapKey, nameMap);
-    }
-
-    async function withNameMapLock(task) {
-        if (navigator.locks?.request) {
-            return navigator.locks.request(nameMapLockName, async () => task());
-        }
-
-        // Keep name-map writes ordered in this tab when Web Locks are unavailable.
-        const next = nameMapWriteQueue.then(task, task);
-        nameMapWriteQueue = next.catch(() => {});
-        return next;
-    }
-
-    async function updateNameMap(mutator) {
-        return withNameMapLock(async () => {
-            const fresh = normalizeNameMap(await GM.getValue(nameMapKey, loadLocalNameMap()));
-            const before = JSON.stringify(fresh);
-            const result = await mutator(fresh);
-
-            if (JSON.stringify(fresh) !== before) {
-                await saveNameMap(fresh);
-            }
-            return result;
-        });
-    }
+    const nameMapStore = createMirroredStore({
+        key: nameMapKey,
+        lockName: nameMapLockName,
+        normalize: normalizeNameMap,
+        createDefault: () => ({ version: 1, group: {}, author: {}, series: {} }),
+        setState: value => { nameMap = value; }
+    });
+    function loadLocalNameMap() { return nameMapStore.loadLocal(); }
+    function saveLocalNameMap(map) { nameMapStore.saveLocal(map); }
+    async function loadNameMap() { return nameMapStore.load(); }
+    async function saveNameMap(map) { return nameMapStore.save(map); }
+    function withNameMapLock(task) { return nameMapStore.withLock(task); }
+    async function updateNameMap(mutator) { return nameMapStore.update(mutator); }
 
     function normalizeFavorites(input) {
         if (!isPlainObject(input) || input.version !== 1 || !isPlainObject(input.author) || !isPlainObject(input.group)) {
@@ -370,62 +384,19 @@
         return normalized;
     }
 
-    function loadLocalFavorites() {
-        try {
-            return normalizeFavorites(JSON.parse(localStorage.getItem(favoritesKey) || 'null'));
-        } catch (e) {
-            return { version: 1, author: {}, group: {}, tag: {} };
-        }
-    }
-
-    function saveLocalFavorites(map) {
-        try {
-            localStorage.setItem(favoritesKey, JSON.stringify(map));
-        } catch (e) {
-            // Favorites mirroring is best-effort; GM storage remains the canonical copy.
-        }
-    }
-
-    async function loadFavorites() {
-        const localMap = loadLocalFavorites();
-        try {
-            favorites = normalizeFavorites(await GM.getValue(favoritesKey, localMap));
-        } catch (e) {
-            favorites = localMap;
-        }
-        saveLocalFavorites(favorites);
-        return favorites;
-    }
-
-    async function saveFavorites(map) {
-        favorites = normalizeFavorites(map);
-        saveLocalFavorites(favorites);
-        await GM.setValue(favoritesKey, favorites);
-    }
-
-    async function withFavoritesLock(task) {
-        if (navigator.locks?.request) {
-            return navigator.locks.request(favoritesLockName, async () => task());
-        }
-
-        // Keep favorite writes ordered in this tab when Web Locks are unavailable.
-        const next = favoritesWriteQueue.then(task, task);
-        favoritesWriteQueue = next.catch(() => {});
-        return next;
-    }
-
-    async function updateFavorites(mutator) {
-        return withFavoritesLock(async () => {
-            const fresh = normalizeFavorites(await GM.getValue(favoritesKey, loadLocalFavorites()));
-            const before = JSON.stringify(fresh);
-            const result = await mutator(fresh);
-
-            if (JSON.stringify(fresh) !== before) {
-                await saveFavorites(fresh);
-            }
-            return result;
-        });
-    }
+    const favoritesStore = createMirroredStore({
+        key: favoritesKey,
+        lockName: favoritesLockName,
+        normalize: normalizeFavorites,
+        createDefault: () => ({ version: 1, author: {}, group: {}, tag: {} }),
+        setState: value => { favorites = value; }
+    });
+    function loadLocalFavorites() { return favoritesStore.loadLocal(); }
+    function saveLocalFavorites(map) { favoritesStore.saveLocal(map); }
+    async function loadFavorites() { return favoritesStore.load(); }
+    async function saveFavorites(map) { return favoritesStore.save(map); }
+    function withFavoritesLock(task) { return favoritesStore.withLock(task); }
+    async function updateFavorites(mutator) { return favoritesStore.update(mutator); }
 
     function isFavorite(kind, romaji) {
         return favorites[kind]?.[romaji] === true;
@@ -447,69 +418,32 @@
         return normalized;
     }
 
-    function loadLocalFavoritesWatch() {
-        try {
-            return normalizeFavoritesWatch(JSON.parse(localStorage.getItem(favoritesWatchKey) || 'null'));
-        } catch (e) {
-            return { version: 1, author: {}, group: {}, tag: {} };
-        }
-    }
-
-    function saveLocalFavoritesWatch(map) {
-        try {
-            localStorage.setItem(favoritesWatchKey, JSON.stringify(map));
-        } catch (e) {
-            // Watch-state mirroring is best-effort; GM storage remains canonical.
-        }
-    }
-
-    async function loadFavoritesWatch() {
-        const localMap = loadLocalFavoritesWatch();
-        try {
-            favoritesWatch = normalizeFavoritesWatch(await GM.getValue(favoritesWatchKey, localMap));
-        } catch (e) {
-            favoritesWatch = localMap;
-        }
-        saveLocalFavoritesWatch(favoritesWatch);
-        return favoritesWatch;
-    }
-
-    async function saveFavoritesWatch(map) {
-        favoritesWatch = normalizeFavoritesWatch(map);
-        saveLocalFavoritesWatch(favoritesWatch);
-        await GM.setValue(favoritesWatchKey, favoritesWatch);
-    }
-
-    async function withFavoritesWatchLock(task) {
-        if (navigator.locks?.request) {
-            return navigator.locks.request(favoritesWatchLockName, async () => task());
-        }
-
-        // Keep watch-state writes ordered in this tab when Web Locks are unavailable.
-        const next = favoritesWatchWriteQueue.then(task, task);
-        favoritesWatchWriteQueue = next.catch(() => {});
-        return next;
-    }
-
-    async function updateFavoritesWatch(mutator) {
-        return withFavoritesWatchLock(async () => {
-            const fresh = normalizeFavoritesWatch(await GM.getValue(favoritesWatchKey, loadLocalFavoritesWatch()));
-            const before = JSON.stringify(fresh);
-            const result = await mutator(fresh);
-
-            if (JSON.stringify(fresh) !== before) {
-                await saveFavoritesWatch(fresh);
-            }
-            return result;
-        });
-    }
+    const favoritesWatchStore = createMirroredStore({
+        key: favoritesWatchKey,
+        lockName: favoritesWatchLockName,
+        normalize: normalizeFavoritesWatch,
+        createDefault: () => ({ version: 1, author: {}, group: {}, tag: {} }),
+        setState: value => { favoritesWatch = value; }
+    });
+    function loadLocalFavoritesWatch() { return favoritesWatchStore.loadLocal(); }
+    function saveLocalFavoritesWatch(map) { favoritesWatchStore.saveLocal(map); }
+    async function loadFavoritesWatch() { return favoritesWatchStore.load(); }
+    async function saveFavoritesWatch(map) { return favoritesWatchStore.save(map); }
+    function withFavoritesWatchLock(task) { return favoritesWatchStore.withLock(task); }
+    async function updateFavoritesWatch(mutator) { return favoritesWatchStore.update(mutator); }
 
     function getLastSeenGalleryId(kind, romaji) {
         return favoritesWatch[kind]?.[romaji] ?? null;
     }
 
+    const hitomiCategoryPathByKind = { author: 'artist', tag: 'tag', group: 'group', series: 'series' };
+
+    function getHitomiCategoryPath(kind) {
+        return hitomiCategoryPathByKind[kind] || 'group';
+    }
+
     async function fetchLatestGalleryId(kind, romaji) {
-        const area = kind === 'author' ? 'artist' : kind === 'tag' ? 'tag' : 'group';
+        const area = getHitomiCategoryPath(kind);
         const language = await loadPreferredLanguage();
         const languageSegment = language === 'off' ? 'all' : language;
         const url = `https://ltn.gold-usergeneratedcontent.net/${area}/${encodeURIComponent(romaji)}-${languageSegment}.nozomi`;
@@ -740,6 +674,53 @@
         if (!(target instanceof Element)) return false;
 
         return Boolean(target.closest('input, textarea, select, [contenteditable="true"]') || target.isContentEditable);
+    }
+
+    function openInBackgroundTab(url, { active = false, setParent = false } = {}) {
+        if (typeof GM !== 'undefined' && typeof GM.openInTab === 'function') {
+            GM.openInTab(url, { active, insert: true, setParent });
+            return;
+        }
+        const opened = window.open(url, '_blank', 'noopener,noreferrer');
+        if (!active) {
+            opened?.blur();
+            window.focus();
+        }
+    }
+
+    function downloadJson(data, filename) {
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    function pickJsonFile() {
+        return new Promise(resolve => {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.json,application/json';
+            input.addEventListener('change', async () => {
+                resolve(input.files.length ? await input.files[0].text() : null);
+            });
+            input.click();
+        });
+    }
+
+    function clampSelectedIndex(index, length) {
+        if (!length) return -1;
+        return Math.max(0, Math.min(length - 1, index));
+    }
+
+    function keyUpTargetIndex(selectedIndex, length) {
+        return selectedIndex === -1 ? length - 1 : selectedIndex - 1;
+    }
+
+    function scrollRowIntoView(row) {
+        row?.scrollIntoView({ block: 'nearest' });
     }
 
     function hasPlainModifierState(e) {
@@ -1332,13 +1313,6 @@
             this.elem.classList.add('hitomi-folded');
             this.elem.querySelectorAll(':scope > *:not(h1.lillie):not(.hitomi-toggle)').forEach(c => {
                 c.style.display = 'none';
-            });
-        }
-
-        #unfold() {
-            this.elem.classList.remove('hitomi-folded');
-            this.elem.querySelectorAll(':scope > *:not(h1.lillie):not(.hitomi-toggle)').forEach(c => {
-                c.style.display = '';
             });
         }
 
@@ -2095,69 +2069,43 @@
                 data[key] = await GM.getValue(blacklistStorageKey(key), '');
             }
 
-            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'hitomi-tweak-blacklist-backup.json';
-            a.click();
-            URL.revokeObjectURL(url);
+            downloadJson(data, 'hitomi-tweak-blacklist-backup.json');
         });
 
-        importBtn.addEventListener('click', () => {
-            const input = document.createElement('input');
-            input.type = 'file';
-            input.accept = '.json,application/json';
-            input.addEventListener('change', async () => {
-                if (!input.files.length) return;
-
-                const text = await input.files[0].text();
-                try {
-                    const data = JSON.parse(text);
-                    for (const key of blacklistKeys) {
-                        if (typeof data[key] === 'string') {
-                            await GM.setValue(blacklistStorageKey(key), data[key]);
-                            panel.querySelector(`#blacklist-input-${key}`).value = data[key];
-                        }
+        importBtn.addEventListener('click', async () => {
+            const text = await pickJsonFile();
+            if (text == null) return;
+            try {
+                const data = JSON.parse(text);
+                for (const key of blacklistKeys) {
+                    if (typeof data[key] === 'string') {
+                        await GM.setValue(blacklistStorageKey(key), data[key]);
+                        panel.querySelector(`#blacklist-input-${key}`).value = data[key];
                     }
-
-                    const blackList = await loadBlacklist();
-                    refreshFilter(blackList);
-                } catch (e) {
-                    alert('Invalid file format');
                 }
-            });
-            input.click();
+
+                const blackList = await loadBlacklist();
+                refreshFilter(blackList);
+            } catch (e) {
+                alert('Invalid file format');
+            }
         });
 
         nameMapExportBtn.addEventListener('click', async () => {
             const data = normalizeNameMap(await GM.getValue(nameMapKey, nameMap));
-            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'hitomi-tweak-name-map-backup.json';
-            a.click();
-            URL.revokeObjectURL(url);
+            downloadJson(data, 'hitomi-tweak-name-map-backup.json');
         });
 
-        nameMapImportBtn.addEventListener('click', () => {
-            const input = document.createElement('input');
-            input.type = 'file';
-            input.accept = '.json,application/json';
-            input.addEventListener('change', async () => {
-                if (!input.files.length) return;
-
-                const text = await input.files[0].text();
-                try {
-                    const beforeCount = countNameMapEntries();
-                    await saveNameMap(JSON.parse(text));
-                    alert(`Name map imported: ${beforeCount} -> ${countNameMapEntries()} entries`);
-                } catch (e) {
-                    alert('Invalid name map format');
-                }
-            });
-            input.click();
+        nameMapImportBtn.addEventListener('click', async () => {
+            const text = await pickJsonFile();
+            if (text == null) return;
+            try {
+                const beforeCount = countNameMapEntries();
+                await saveNameMap(JSON.parse(text));
+                alert(`Name map imported: ${beforeCount} -> ${countNameMapEntries()} entries`);
+            } catch (e) {
+                alert('Invalid name map format');
+            }
         });
 
         panel.appendChild(form);
@@ -2504,15 +2452,9 @@
         }
 
         function openFavoriteInBackground(entry) {
-            const hitomiCategoryPath = entry.kind === 'author' ? 'artist' : entry.kind === 'tag' ? 'tag' : 'group';
+            const hitomiCategoryPath = getHitomiCategoryPath(entry.kind);
             const url = `https://hitomi.la/${hitomiCategoryPath}/${encodeURIComponent(entry.romaji)}-all.html`;
-            if (typeof GM !== 'undefined' && typeof GM.openInTab === 'function') {
-                GM.openInTab(url, { active: false, insert: true, setParent: false });
-            } else {
-                const opened = window.open(url, '_blank', 'noopener,noreferrer');
-                opened?.blur();
-                window.focus();
-            }
+            openInBackgroundTab(url, { setParent: false });
             markFavoriteSeen(entry, getFavoriteEntryKey(entry));
         }
 
@@ -2540,18 +2482,14 @@
 
         function focusRow(index, { scrollIntoView = true } = {}) {
             const entries = getFilteredFavoriteEntries();
-            if (!entries.length) {
-                selectedIndex = -1;
-                return;
-            }
-
-            selectedIndex = Math.max(0, Math.min(entries.length - 1, index));
+            selectedIndex = clampSelectedIndex(index, entries.length);
+            if (selectedIndex === -1) return;
             applySelectionHighlight();
-            if (scrollIntoView) tbody.children[selectedIndex]?.scrollIntoView({ block: 'nearest' });
+            if (scrollIntoView) scrollRowIntoView(tbody.children[selectedIndex]);
         }
 
         function handleKeydown(event) {
-            if (isEditableTarget(event.target) || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+            if (isEditableTarget(event.target) || !hasPlainModifierState(event)) return;
 
             if (event.key === 'j') {
                 event.preventDefault();
@@ -2559,7 +2497,7 @@
             } else if (event.key === 'k') {
                 event.preventDefault();
                 const entries = getFilteredFavoriteEntries();
-                focusRow(selectedIndex === -1 ? entries.length - 1 : selectedIndex - 1);
+                focusRow(keyUpTargetIndex(selectedIndex, entries.length));
             } else if (event.key === 'v') {
                 const entries = getFilteredFavoriteEntries();
                 const entry = entries[selectedIndex];
@@ -2585,7 +2523,7 @@
                 const link = document.createElement('a');
                 const removeButton = document.createElement('button');
                 const japanese = nameMap[entry.kind]?.[entry.romaji];
-                const hitomiCategoryPath = entry.kind === 'author' ? 'artist' : entry.kind === 'tag' ? 'tag' : 'group';
+                const hitomiCategoryPath = getHitomiCategoryPath(entry.kind);
                 const entryKey = getFavoriteEntryKey(entry);
 
                 tr.tabIndex = -1;
@@ -2901,13 +2839,7 @@
         }
 
         function downloadNameMap() {
-            const blob = new Blob([JSON.stringify(nameMap, null, 2)], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'hitomi-tweak-name-map-backup.json';
-            a.click();
-            URL.revokeObjectURL(url);
+            downloadJson(nameMap, 'hitomi-tweak-name-map-backup.json');
         }
 
         function getDownloadCount(entry) {
@@ -2977,14 +2909,10 @@
 
         function focusRow(index, { scrollIntoView = true } = {}) {
             const entries = getFilteredEntries();
-            if (!entries.length) {
-                selectedIndex = -1;
-                return;
-            }
-
-            selectedIndex = Math.max(0, Math.min(entries.length - 1, index));
+            selectedIndex = clampSelectedIndex(index, entries.length);
+            if (selectedIndex === -1) return;
             applySelectionHighlight();
-            if (scrollIntoView) tbody.children[selectedIndex]?.scrollIntoView({ block: 'nearest' });
+            if (scrollIntoView) scrollRowIntoView(tbody.children[selectedIndex]);
         }
 
         function renderTable() {
@@ -3002,7 +2930,7 @@
                 const actionTd = document.createElement('td');
                 const deleteBtn = document.createElement('button');
 
-                const hitomiCategoryPath = entry.kind === 'author' ? 'artist' : entry.kind === 'series' ? 'series' : 'group';
+                const hitomiCategoryPath = getHitomiCategoryPath(entry.kind);
                 const romajiLink = document.createElement('a');
                 romajiLink.href = `https://hitomi.la/${hitomiCategoryPath}/${encodeURIComponent(entry.romaji)}-all.html`;
                 romajiLink.target = '_blank';
@@ -3097,11 +3025,7 @@
         }
 
         function handleKeydown(event) {
-            if (isEditableTarget(event.target)
-                || event.ctrlKey
-                || event.metaKey
-                || event.altKey
-                || event.shiftKey) return;
+            if (isEditableTarget(event.target) || !hasPlainModifierState(event)) return;
 
             if (event.key === 'j') {
                 event.preventDefault();
@@ -3109,7 +3033,7 @@
             } else if (event.key === 'k') {
                 event.preventDefault();
                 const entries = getFilteredEntries();
-                focusRow(selectedIndex === -1 ? entries.length - 1 : selectedIndex - 1);
+                focusRow(keyUpTargetIndex(selectedIndex, entries.length));
             } else if (event.key === 'Enter') {
                 const input = tbody.children[selectedIndex]?.querySelector('.hitomi-name-map-japanese-input');
                 if (input) {
@@ -3121,26 +3045,20 @@
         }
 
         exportBtn.addEventListener('click', downloadNameMap);
-        importBtn.addEventListener('click', () => {
-            const input = document.createElement('input');
-            input.type = 'file';
-            input.accept = '.json,application/json';
-            input.addEventListener('change', async () => {
-                if (!input.files.length) return;
-
-                const beforeCount = countNameMapEntries();
-                try {
-                    const imported = normalizeNameMap(JSON.parse(await input.files[0].text()));
-                    await saveNameMap(imported);
-                    const afterCount = countNameMapEntries();
-                    const unfilledCount = getNameMapEntries().filter(entry => !entry.japanese).length;
-                    setStatus(`${beforeCount} -> ${afterCount} entries, ${unfilledCount} unfilled`);
-                    renderTable();
-                } catch (e) {
-                    setStatus('Invalid name map format.');
-                }
-            });
-            input.click();
+        importBtn.addEventListener('click', async () => {
+            const text = await pickJsonFile();
+            if (text == null) return;
+            const beforeCount = countNameMapEntries();
+            try {
+                const imported = normalizeNameMap(JSON.parse(text));
+                await saveNameMap(imported);
+                const afterCount = countNameMapEntries();
+                const unfilledCount = getNameMapEntries().filter(entry => !entry.japanese).length;
+                setStatus(`${beforeCount} -> ${afterCount} entries, ${unfilledCount} unfilled`);
+                renderTable();
+            } catch (e) {
+                setStatus('Invalid name map format.');
+            }
         });
         searchInput.addEventListener('input', renderTable);
         window.addEventListener('keydown', handleKeydown, true);
@@ -3324,12 +3242,8 @@
         }
 
         function focusRow(index) {
-            if (!rows.length) {
-                selectedIndex = -1;
-                return;
-            }
-
-            selectedIndex = Math.max(0, Math.min(rows.length - 1, index));
+            selectedIndex = clampSelectedIndex(index, rows.length);
+            if (selectedIndex === -1) return;
             renderBody(true);
         }
 
@@ -3337,11 +3251,7 @@
             const url = getSelectedRow()?.url;
             if (!url) return false;
 
-            GM.openInTab(url, {
-                active: false,
-                insert: true,
-                setParent: true
-            });
+            openInBackgroundTab(url, { setParent: true });
             return true;
         }
 
@@ -3380,7 +3290,7 @@
             }));
 
             if (scrollToSelection) {
-                tbodyElem.querySelector(`.${selectedRowClassName}`)?.scrollIntoView({ block: 'nearest' });
+                scrollRowIntoView(tbodyElem.querySelector(`.${selectedRowClassName}`));
             }
             renderHeaders();
         }
@@ -3547,10 +3457,6 @@
             document.body.appendChild(page);
         }
 
-        function wait(ms) {
-            return new Promise(resolve => window.setTimeout(resolve, ms));
-        }
-
         async function hydrateMissingMetadata() {
             const attemptedIds = new Set();
             let fetchedCount = 0;
@@ -3589,20 +3495,15 @@
             setStatus(`${rows.length} books`);
         }
 
-        function isEditableTarget(target) {
-            if (!(target instanceof Element)) return false;
-            return Boolean(target.closest('input, textarea, select') || target.isContentEditable);
-        }
-
         function handleKeydown(event) {
-            if (isEditableTarget(event.target) || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+            if (isEditableTarget(event.target) || !hasPlainModifierState(event)) return;
 
             if (event.key === 'j') {
                 event.preventDefault();
                 focusRow(selectedIndex + 1);
             } else if (event.key === 'k') {
                 event.preventDefault();
-                focusRow(selectedIndex === -1 ? rows.length - 1 : selectedIndex - 1);
+                focusRow(keyUpTargetIndex(selectedIndex, rows.length));
             } else if (event.key === 'v' && openSelectedRow()) {
                 event.preventDefault();
             }
@@ -4956,31 +4857,13 @@
         const link = getFocusedBook()?.querySelector(':scope > h1 > a');
         if (!link?.href) return false;
 
-        if (typeof GM !== 'undefined' && typeof GM.openInTab === 'function') {
-            GM.openInTab(link.href, {
-                active: false,
-                insert: true,
-                setParent: false
-            });
-        } else {
-            const opened = window.open(link.href, '_blank', 'noopener,noreferrer');
-            opened?.blur();
-            window.focus();
-        }
+        openInBackgroundTab(link.href, { setParent: false });
 
         return true;
     }
 
     function openUrlInNewTab(url) {
-        if (typeof GM !== 'undefined' && typeof GM.openInTab === 'function') {
-            GM.openInTab(url, {
-                active: true,
-                insert: true,
-                setParent: true
-            });
-        } else {
-            window.open(url, '_blank', 'noopener,noreferrer');
-        }
+        openInBackgroundTab(url, { active: true, setParent: true });
     }
 
     function getFocusedBookAuthorLinks() {
