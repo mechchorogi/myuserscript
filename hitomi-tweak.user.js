@@ -9,6 +9,8 @@
 // @grant        GM.getValue
 // @grant        GM.setValue
 // @grant        GM.openInTab
+// @grant        GM_registerMenuCommand
+// @grant        GM_unregisterMenuCommand
 // @grant        window.close
 // @grant        unsafeWindow
 // @require      https://ltn.gold-usergeneratedcontent.net/FileSaver.min.js
@@ -30,7 +32,7 @@
 // - Book ids come from the trailing number in the book URL. The same id powers fold
 //   persistence, reader URL inference, list-page downloads, and downloaded markers.
 
-/* global JSZip, saveAs, unsafeWindow */
+/* global JSZip, saveAs, unsafeWindow, GM_registerMenuCommand, GM_unregisterMenuCommand */
 
 (function() {
     'use strict';
@@ -50,6 +52,9 @@
     const favoritesPagePath = '/hitomi-tweak-favorites.html';
     const downloadPagePath = '/hitomi-tweak-download.html';
     const preferredLanguageKey = 'hitomi-tweak-preferred-language';
+    const filterEnabledKey = 'hitomi-tweak-blocklist-enabled';
+    const nameMapEnabledKey = 'hitomi-tweak-name-map-enabled';
+    const preferredLanguageEnabledKey = 'hitomi-tweak-preferred-language-enabled';
     const closeBookPageAfterDownloadKey = 'hitomi-tweak-close-book-page-after-download';
     const pageCountCacheKey = 'hitomi-tweak-page-count-cache';
     const pageCountCacheMaxEntries = 3000;
@@ -129,6 +134,7 @@
     let pendingGroupBlacklistFetchQueue = [];
     let groupBlacklistFetchTargets = new Map(); // galleryId -> Set<card>
     let isListPageCountBadgesEnabled = true;
+    let isNameMapEnabled = true;
     let titleBeforeListDownloads = null;
     let titleBeforeBookPageDownloadTitle = null;
     let unifiedDownloadsWriteQueue = Promise.resolve();
@@ -464,6 +470,7 @@
     }
 
     function resolveJapaneseName(name, kind) {
+        if (!isNameMapEnabled) return name;
         const normalized = normalizeNameMapKey(name);
         return (kind === 'group' || kind === 'author' || kind === 'series') && normalized ? nameMap[kind]?.[normalized] || name : name;
     }
@@ -493,6 +500,8 @@
     }
 
     async function loadPreferredLanguage() {
+        const enabled = await GM.getValue(preferredLanguageEnabledKey, true);
+        if (!enabled) return 'off';
         return normalizePreferredLanguage(await GM.getValue(preferredLanguageKey, 'off'));
     }
 
@@ -1653,6 +1662,7 @@
     }
 
     function annotateNameMapLinks(root) {
+        if (!isNameMapEnabled) return;
         // Unlike blacklist matching/highlighting, this only rewrites a link's own label
         // based on its own href+text, so it is safe to also annotate the "related
         // galleries" widget on book pages (other books' links, not excluded here).
@@ -1913,6 +1923,27 @@
         refreshFilter(blackList);
     }
 
+    function applyBlocklistFormDisabledState(panel, enabled) {
+        for (const key of blacklistKeys) {
+            const textarea = panel.querySelector(`#blacklist-input-${key}`);
+            if (textarea) textarea.disabled = !enabled;
+        }
+    }
+
+    function applyPreferredLanguageFormDisabledState(select, enabled) {
+        if (select) select.disabled = !enabled;
+    }
+
+    function applyNameMapFormDisabledState(exportBtn, importBtn, editLink, enabled) {
+        if (exportBtn) exportBtn.disabled = !enabled;
+        if (importBtn) importBtn.disabled = !enabled;
+        if (editLink) {
+            editLink.setAttribute('aria-disabled', String(!enabled));
+            editLink.style.pointerEvents = enabled ? '' : 'none';
+            editLink.style.opacity = enabled ? '' : '0.5';
+        }
+    }
+
     async function createFilterUI() {
         const panel = document.createElement('div');
         panel.id = filterPanelId;
@@ -1975,43 +2006,11 @@
         // books by condition. Separate them visually so they don't read as one setting.
         const blocklistHeading = document.createElement('div');
         const blocklistHeadingText = document.createElement('label');
-        const toggleCheckbox = document.createElement('input');
-        const toggleSwitch = document.createElement('label');
-        const toggleSlider = document.createElement('span');
-        const pageCountBadgesToggleRow = document.createElement('div');
-        const pageCountBadgesToggleLabel = document.createElement('label');
-        const pageCountBadgesToggleCheckbox = document.createElement('input');
-        const pageCountBadgesToggleSwitch = document.createElement('label');
-        const pageCountBadgesToggleSlider = document.createElement('span');
 
         blocklistHeadingText.textContent = 'Blocklist';
-        blocklistHeadingText.htmlFor = 'hitomi-tweak-filter-enabled-toggle';
         Object.assign(blocklistHeadingText.style, {
-            cursor: 'pointer',
             userSelect: 'none'
         });
-
-        toggleCheckbox.id = blocklistHeadingText.htmlFor;
-        toggleCheckbox.className = 'hitomi-switch-input';
-        toggleCheckbox.type = 'checkbox';
-        toggleCheckbox.checked = filterEnabled;
-        toggleCheckbox.setAttribute('aria-label', 'Blocklist enabled');
-        toggleCheckbox.addEventListener('change', () => {
-            filterEnabled = toggleCheckbox.checked;
-            if (filterEnabled) {
-                loadBlacklist().then(refreshFilter);
-            } else {
-                clearFilter();
-                clearBookPageBlacklistHighlights();
-                refreshDownloadIndicators().catch(() => {});
-            }
-        });
-
-        toggleSwitch.className = 'hitomi-switch';
-        toggleSwitch.htmlFor = toggleCheckbox.id;
-
-        toggleSlider.className = 'hitomi-switch-slider';
-        toggleSwitch.append(toggleCheckbox, toggleSlider);
 
         Object.assign(blocklistHeading.style, {
             display: 'flex',
@@ -2023,54 +2022,8 @@
             paddingTop: '12px',
             borderTop: '1px solid rgba(0, 0, 0, 0.3)'
         });
-        blocklistHeading.append(blocklistHeadingText, toggleSwitch);
+        blocklistHeading.appendChild(blocklistHeadingText);
         form.appendChild(blocklistHeading);
-
-        pageCountBadgesToggleLabel.textContent = 'Page count';
-        pageCountBadgesToggleLabel.htmlFor = 'hitomi-tweak-page-count-badges-toggle';
-        Object.assign(pageCountBadgesToggleLabel.style, {
-            cursor: 'pointer',
-            userSelect: 'none'
-        });
-
-        pageCountBadgesToggleCheckbox.id = pageCountBadgesToggleLabel.htmlFor;
-        pageCountBadgesToggleCheckbox.className = 'hitomi-switch-input';
-        pageCountBadgesToggleCheckbox.type = 'checkbox';
-        pageCountBadgesToggleCheckbox.checked = isListPageCountBadgesEnabled;
-        pageCountBadgesToggleCheckbox.setAttribute('aria-label', 'Page count badges enabled');
-        pageCountBadgesToggleCheckbox.addEventListener('change', () => {
-            isListPageCountBadgesEnabled = pageCountBadgesToggleCheckbox.checked;
-            GM.setValue(listPageCountBadgesEnabledKey, isListPageCountBadgesEnabled).catch(() => {});
-            if (isListPageCountBadgesEnabled) {
-                document.querySelectorAll('div.gallery-content').forEach(gallery => annotatePageCountBadges(gallery));
-            } else {
-                document.querySelectorAll('div.gallery-content > div').forEach(card => {
-                    delete card.dataset.hitomiPageCountGalleryId;
-                    delete card.dataset.hitomiPageCountHandled;
-                    const heading = getListCardHeading(card);
-                    if (heading) {
-                        delete heading.dataset.hitomiPageCountAnnotated;
-                        heading.querySelector(`:scope > .${pageCountBadgeClassName}`)?.remove();
-                    }
-                });
-            }
-        });
-
-        pageCountBadgesToggleSwitch.className = 'hitomi-switch';
-        pageCountBadgesToggleSwitch.htmlFor = pageCountBadgesToggleCheckbox.id;
-        pageCountBadgesToggleSlider.className = 'hitomi-switch-slider';
-        pageCountBadgesToggleSwitch.append(pageCountBadgesToggleCheckbox, pageCountBadgesToggleSlider);
-
-        Object.assign(pageCountBadgesToggleRow.style, {
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '10px',
-            fontWeight: 'bold',
-            marginTop: '8px'
-        });
-        pageCountBadgesToggleRow.append(pageCountBadgesToggleLabel, pageCountBadgesToggleSwitch);
-        form.insertBefore(pageCountBadgesToggleRow, blocklistHeading);
 
         for (const key of blacklistKeys) {
             const label = document.createElement('label');
@@ -2102,38 +2055,12 @@
         importBtn.textContent = 'Import';
 
         const nameMapExportBtn = document.createElement('button');
+        nameMapExportBtn.id = 'hitomi-tweak-name-map-export';
         nameMapExportBtn.textContent = 'Export';
 
         const nameMapImportBtn = document.createElement('button');
+        nameMapImportBtn.id = 'hitomi-tweak-name-map-import';
         nameMapImportBtn.textContent = 'Import';
-
-        const closeAfterDownloadSection = document.createElement('div');
-        const closeAfterDownloadLabel = document.createElement('label');
-        const closeAfterDownloadCheckbox = document.createElement('input');
-        const closeAfterDownloadSwitch = document.createElement('label');
-        const closeAfterDownloadSlider = document.createElement('span');
-
-        closeAfterDownloadLabel.textContent = 'Auto tab close';
-        closeAfterDownloadLabel.htmlFor = 'hitomi-tweak-close-after-download-toggle';
-        Object.assign(closeAfterDownloadLabel.style, {
-            cursor: 'pointer',
-            userSelect: 'none'
-        });
-
-        closeAfterDownloadCheckbox.id = closeAfterDownloadLabel.htmlFor;
-        closeAfterDownloadCheckbox.className = 'hitomi-switch-input';
-        closeAfterDownloadCheckbox.type = 'checkbox';
-        closeAfterDownloadCheckbox.checked = await loadCloseBookPageAfterDownload();
-        closeAfterDownloadCheckbox.setAttribute('aria-label', 'Close tab after book page download');
-        closeAfterDownloadCheckbox.addEventListener('change', () => {
-            GM.setValue(closeBookPageAfterDownloadKey, closeAfterDownloadCheckbox.checked).catch(() => {});
-        });
-
-        closeAfterDownloadSwitch.className = 'hitomi-switch';
-        closeAfterDownloadSwitch.htmlFor = closeAfterDownloadCheckbox.id;
-
-        closeAfterDownloadSlider.className = 'hitomi-switch-slider';
-        closeAfterDownloadSwitch.append(closeAfterDownloadCheckbox, closeAfterDownloadSlider);
 
         exportBtn.addEventListener('click', async () => {
             const data = {};
@@ -2211,12 +2138,16 @@
         const nameMapHeading = document.createElement('div');
         const nameMapEditLink = document.createElement('a');
 
+        nameMapEditLink.id = 'hitomi-tweak-name-map-edit';
         nameMapEditLink.href = nameMapPagePath;
         nameMapEditLink.target = '_blank';
         nameMapEditLink.rel = 'noopener noreferrer';
         nameMapEditLink.textContent = 'Edit';
         Object.assign(nameMapEditLink.style, {
             fontWeight: 'normal'
+        });
+        nameMapEditLink.addEventListener('click', e => {
+            if (!isNameMapEnabled) e.preventDefault();
         });
         Object.assign(nameMapHeading.style, {
             display: 'flex',
@@ -2237,25 +2168,20 @@
         });
         nameMapBackupRow.append(nameMapExportBtn, nameMapImportBtn);
 
-        Object.assign(closeAfterDownloadSection.style, {
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '10px',
-            fontWeight: 'bold',
-            marginTop: '2px',
-            paddingTop: '12px',
-            borderTop: '1px solid rgba(0, 0, 0, 0.3)'
-        });
-        closeAfterDownloadSection.append(closeAfterDownloadLabel, closeAfterDownloadSwitch);
-
-        buttonRow.append(markModeRow, backupRow, nameMapHeading, nameMapBackupRow, closeAfterDownloadSection);
+        buttonRow.append(markModeRow, backupRow, nameMapHeading, nameMapBackupRow);
         panel.appendChild(buttonRow);
 
         for (const key of blacklistKeys) {
             const value = await GM.getValue(blacklistStorageKey(key), '');
             panel.querySelector(`#blacklist-input-${key}`).value = value;
         }
+
+        applyBlocklistFormDisabledState(panel, filterEnabled);
+        applyPreferredLanguageFormDisabledState(
+            preferredLanguageSelect,
+            await GM.getValue(preferredLanguageEnabledKey, true)
+        );
+        applyNameMapFormDisabledState(nameMapExportBtn, nameMapImportBtn, nameMapEditLink, isNameMapEnabled);
 
         filterMarkModeButton.addEventListener('click', () => {
             const active = filterMarkModeButton.dataset.active === 'true';
@@ -2316,6 +2242,7 @@
 
     async function installFilter() {
         await loadFoldedBookIds();
+        filterEnabled = await GM.getValue(filterEnabledKey, true);
         isListPageCountBadgesEnabled = await GM.getValue(listPageCountBadgesEnabledKey, true);
         await loadPageCountCache();
         await createFilterUI();
@@ -3961,6 +3888,7 @@
     }
 
     function harvestNameMapKeys(galleryInfo) {
+        if (!isNameMapEnabled) return Promise.resolve();
         if (!galleryInfo) return Promise.resolve();
 
         return updateNameMap(map => {
@@ -5410,7 +5338,119 @@
         waitForNav();
     }
 
+    let blocklistMenuCommandId = null;
+
+    function refreshBlocklistMenuCommand() {
+        if (blocklistMenuCommandId != null) GM_unregisterMenuCommand(blocklistMenuCommandId);
+        blocklistMenuCommandId = GM_registerMenuCommand(`Blocklist: ${filterEnabled ? 'ON' : 'OFF'}`, toggleBlocklistEnabled);
+    }
+
+    async function toggleBlocklistEnabled() {
+        filterEnabled = !filterEnabled;
+        await GM.setValue(filterEnabledKey, filterEnabled);
+        if (filterEnabled) {
+            refreshFilter(await loadBlacklist());
+        } else {
+            clearFilter();
+            clearBookPageBlacklistHighlights();
+            refreshDownloadIndicators().catch(() => {});
+        }
+        const panel = document.querySelector(`#${filterPanelId}`);
+        if (panel) applyBlocklistFormDisabledState(panel, filterEnabled);
+        refreshBlocklistMenuCommand();
+    }
+
+    let pageCountMenuCommandId = null;
+
+    function refreshPageCountMenuCommand() {
+        if (pageCountMenuCommandId != null) GM_unregisterMenuCommand(pageCountMenuCommandId);
+        pageCountMenuCommandId = GM_registerMenuCommand(`Page Count: ${isListPageCountBadgesEnabled ? 'ON' : 'OFF'}`, togglePageCountEnabled);
+    }
+
+    async function togglePageCountEnabled() {
+        isListPageCountBadgesEnabled = !isListPageCountBadgesEnabled;
+        GM.setValue(listPageCountBadgesEnabledKey, isListPageCountBadgesEnabled).catch(() => {});
+        if (isListPageCountBadgesEnabled) {
+            document.querySelectorAll('div.gallery-content').forEach(gallery => annotatePageCountBadges(gallery));
+        } else {
+            document.querySelectorAll('div.gallery-content > div').forEach(card => {
+                delete card.dataset.hitomiPageCountGalleryId;
+                delete card.dataset.hitomiPageCountHandled;
+                const heading = getListCardHeading(card);
+                if (heading) {
+                    delete heading.dataset.hitomiPageCountAnnotated;
+                    heading.querySelector(`:scope > .${pageCountBadgeClassName}`)?.remove();
+                }
+            });
+        }
+        refreshPageCountMenuCommand();
+    }
+
+    let nameMapMenuCommandId = null;
+
+    function refreshNameMapMenuCommand() {
+        if (nameMapMenuCommandId != null) GM_unregisterMenuCommand(nameMapMenuCommandId);
+        nameMapMenuCommandId = GM_registerMenuCommand(`Name Map: ${isNameMapEnabled ? 'ON' : 'OFF'}`, toggleNameMapEnabled);
+    }
+
+    async function toggleNameMapEnabled() {
+        isNameMapEnabled = !isNameMapEnabled;
+        await GM.setValue(nameMapEnabledKey, isNameMapEnabled);
+        const panel = document.querySelector(`#${filterPanelId}`);
+        if (panel) {
+            applyNameMapFormDisabledState(
+                panel.querySelector('#hitomi-tweak-name-map-export'),
+                panel.querySelector('#hitomi-tweak-name-map-import'),
+                panel.querySelector('#hitomi-tweak-name-map-edit'),
+                isNameMapEnabled
+            );
+        }
+        refreshNameMapMenuCommand();
+    }
+
+    let autoTabCloseMenuCommandId = null;
+
+    function refreshAutoTabCloseMenuCommand() {
+        if (autoTabCloseMenuCommandId != null) GM_unregisterMenuCommand(autoTabCloseMenuCommandId);
+        GM.getValue(closeBookPageAfterDownloadKey, false).then(enabled => {
+            if (autoTabCloseMenuCommandId != null) GM_unregisterMenuCommand(autoTabCloseMenuCommandId);
+            autoTabCloseMenuCommandId = GM_registerMenuCommand(`Auto Tab Close: ${enabled ? 'ON' : 'OFF'}`, toggleAutoTabCloseEnabled);
+        });
+    }
+
+    async function toggleAutoTabCloseEnabled() {
+        const current = await GM.getValue(closeBookPageAfterDownloadKey, false);
+        await GM.setValue(closeBookPageAfterDownloadKey, !current);
+        refreshAutoTabCloseMenuCommand();
+    }
+
+    let preferredLanguageMenuCommandId = null;
+
+    async function refreshPreferredLanguageMenuCommand() {
+        const enabled = await GM.getValue(preferredLanguageEnabledKey, true);
+        if (preferredLanguageMenuCommandId != null) GM_unregisterMenuCommand(preferredLanguageMenuCommandId);
+        preferredLanguageMenuCommandId = GM_registerMenuCommand(`Preferred Language: ${enabled ? 'ON' : 'OFF'}`, togglePreferredLanguageEnabled);
+    }
+
+    async function togglePreferredLanguageEnabled() {
+        const current = await GM.getValue(preferredLanguageEnabledKey, true);
+        const enabled = !current;
+        await GM.setValue(preferredLanguageEnabledKey, enabled);
+        const select = document.querySelector(`#${filterPanelId} #hitomi-tweak-preferred-language-select`);
+        if (select) applyPreferredLanguageFormDisabledState(select, enabled);
+        refreshPreferredLanguageMenuCommand();
+    }
+
     async function main() {
+        filterEnabled = await GM.getValue(filterEnabledKey, true);
+        isListPageCountBadgesEnabled = await GM.getValue(listPageCountBadgesEnabledKey, true);
+        isNameMapEnabled = await GM.getValue(nameMapEnabledKey, true);
+        refreshBlocklistMenuCommand();
+        refreshPageCountMenuCommand();
+        refreshNameMapMenuCommand();
+        refreshAutoTabCloseMenuCommand();
+        await refreshPreferredLanguageMenuCommand();
+
         if (isNameMapPage()) {
             await renderNameMapPage();
             return;

@@ -39,5 +39,20 @@
         }
     };
 
+    // Real Tampermonkey exposes registered menu commands via its own extension UI,
+    // which doesn't exist under plain Playwright. Keep a simple id->{label,onClick}
+    // registry on window so tests can inspect labels and invoke onClick directly.
+    let nextMenuCommandId = 1;
+    window.__gmMenuCommands__ = new Map();
+    window.GM_registerMenuCommand = function(label, onClick) {
+        const id = nextMenuCommandId++;
+        window.__gmMenuCommands__.set(id, { label, onClick });
+        console.log('[gm-shim] GM_registerMenuCommand', id, label);
+        return id;
+    };
+    window.GM_unregisterMenuCommand = function(id) {
+        window.__gmMenuCommands__.delete(id);
+    };
+
     window.unsafeWindow = window;
 })();
