@@ -92,6 +92,7 @@
     const shakeBlockedClassName = 'hitomi-tweak-shake-blocked';
     const blocklistModeActiveClassName = 'hitomi-tweak-blocklist-mode-active';
     const filterPanelId = 'hitomi-tweak-filter-panel';
+    const filterPanelCollapsedKey = 'hitomi-tweak-filter-panel-collapsed';
     const filterBookMap = new WeakMap();
     // Keep the help overlay generated from the same source as key handling so the
     // displayed shortcuts do not drift from the actual behavior.
@@ -1946,6 +1947,8 @@
 
     async function createFilterUI() {
         const panel = document.createElement('div');
+        const toggleButton = document.createElement('button');
+        let collapsed = Boolean(await GM.getValue(filterPanelCollapsedKey, false));
         panel.id = filterPanelId;
         Object.assign(panel.style, {
             position: 'fixed',
@@ -1963,6 +1966,40 @@
             fontSize: '14px',
             zoom: '0.95',
             zIndex: 9999
+        });
+        panel.style.display = collapsed ? 'none' : '';
+
+        // Keep this control outside the panel so reopening remains possible after collapse.
+        Object.assign(toggleButton.style, {
+            position: 'fixed',
+            top: '10px',
+            width: '28px',
+            height: '28px',
+            padding: '0',
+            border: '1px solid rgba(0, 0, 0, 0.2)',
+            borderRadius: '6px',
+            background: 'rgba(255, 255, 255, 0.95)',
+            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)',
+            cursor: 'pointer',
+            fontSize: '16px',
+            lineHeight: '26px',
+            zIndex: 10000
+        });
+
+        function updatePanelToggle() {
+            toggleButton.textContent = collapsed ? '⚙' : '×';
+            toggleButton.title = collapsed ? 'Open Hitomi::Tweak settings' : 'Close Hitomi::Tweak settings';
+            toggleButton.setAttribute('aria-label', toggleButton.title);
+            toggleButton.setAttribute('aria-expanded', String(!collapsed));
+            toggleButton.style.right = collapsed ? '10px' : '194px';
+        }
+
+        updatePanelToggle();
+        toggleButton.addEventListener('click', () => {
+            collapsed = !collapsed;
+            panel.style.display = collapsed ? 'none' : '';
+            updatePanelToggle();
+            GM.setValue(filterPanelCollapsedKey, collapsed).catch(() => {});
         });
 
         const form = document.createElement('div');
@@ -2195,7 +2232,7 @@
             }
         });
 
-        document.body.appendChild(panel);
+        document.body.append(panel, toggleButton);
     }
 
     function observeGallery(blackList) {
