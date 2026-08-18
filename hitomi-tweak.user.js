@@ -35,7 +35,7 @@
 (function() {
     'use strict';
 
-    const blacklistKeys = ['author', 'language', 'series', 'tag', 'title', 'type'];
+    const blacklistKeys = ['author', 'group', 'language', 'series', 'tag', 'title', 'type'];
     const downloadHistoryKey = 'hitomi-tweak-download-history';
     const unifiedDownloadsKey = 'hitomi-tweak-downloads';
     const unifiedDownloadsLockName = 'hitomi-tweak-downloads-lock';
@@ -55,6 +55,8 @@
     const pageCountCacheMaxEntries = 3000;
     const pageCountFetchConcurrency = 1;
     const pageCountFetchTimeoutMs = 10000;
+    const groupBlacklistFetchConcurrency = 1;
+    const groupBlacklistFetchTimeoutMs = 10000;
     const listPageCountBadgesEnabledKey = 'hitomi-tweak-list-page-count-badges-enabled';
     const preferredLanguageOptions = [
         ['off', 'Off'],
@@ -123,6 +125,9 @@
     let activePageCountFetches = 0;
     let pendingPageCountFetchQueue = [];
     let pageCountFetchTargets = new Map();
+    let activeGroupBlacklistFetches = 0;
+    let pendingGroupBlacklistFetchQueue = [];
+    let groupBlacklistFetchTargets = new Map(); // galleryId -> Set<card>
     let isListPageCountBadgesEnabled = true;
     let titleBeforeListDownloads = null;
     let titleBeforeBookPageDownloadTitle = null;
@@ -650,6 +655,72 @@
 
         book.dataset.hitomiPageCountHandled = '1';
         enqueuePageCountFetch(book);
+    }
+
+    async function fetchGalleryGroups(galleryId) {
+        const url = `https://ltn.gold-usergeneratedcontent.net/galleries/${galleryId}.js`;
+        const response = await fetch(url, { signal: AbortSignal.timeout(groupBlacklistFetchTimeoutMs) });
+        if (!response.ok) throw new Error(`Unexpected status ${response.status} for gallery ${galleryId}.`);
+        const text = await response.text();
+        const galleryInfo = JSON.parse(text.replace(/^\s*var\s+galleryinfo\s*=\s*/, ''));
+        if (!galleryInfo?.id || String(galleryInfo.id) !== String(galleryId)) {
+            throw new Error(`Could not verify galleryinfo for ${galleryId}.`);
+        }
+        return getGalleryInfoNames(galleryInfo.groups, 'group');
+    }
+
+    function enqueueGroupBlacklistFetch(galleryId, card) {
+        const existingTargets = groupBlacklistFetchTargets.get(galleryId);
+        if (existingTargets) {
+            existingTargets.add(card);
+            return;
+        }
+        groupBlacklistFetchTargets.set(galleryId, new Set([card]));
+        pendingGroupBlacklistFetchQueue.push(galleryId);
+        pumpGroupBlacklistFetchQueue();
+    }
+
+    function pumpGroupBlacklistFetchQueue() {
+        while (activeGroupBlacklistFetches < groupBlacklistFetchConcurrency && pendingGroupBlacklistFetchQueue.length) {
+            runGroupBlacklistFetch(pendingGroupBlacklistFetchQueue.shift());
+        }
+    }
+
+    async function runGroupBlacklistFetch(galleryId) {
+        activeGroupBlacklistFetches++;
+        try {
+            const groups = await fetchGalleryGroups(galleryId);
+            const blackList = await loadBlacklist();
+            const lowerGroups = groups.map(g => g.toLowerCase());
+            const matched = (blackList.group || []).some(x => lowerGroups.includes(x.toLowerCase()));
+            if (matched) {
+                for (const card of groupBlacklistFetchTargets.get(galleryId) || []) {
+                    if (card.isConnected) getFilterBook(card).fold();
+                }
+            }
+        } catch (e) {
+            // Fetch failures stay silent and are not retried during this page session.
+        } finally {
+            activeGroupBlacklistFetches--;
+            groupBlacklistFetchTargets.delete(galleryId);
+            pumpGroupBlacklistFetchQueue();
+        }
+    }
+
+    function triggerGroupBlacklistCheckForFocusedBook(book) {
+        if (!filterEnabled || !book) return;
+        if (book.classList.contains('hitomi-folded')) return;
+        if (book.dataset.hitomiGroupBlacklistHandled) return;
+
+        const galleryId = getBookIdFromElement(book);
+        if (!galleryId) return;
+
+        loadBlacklist().then(blackList => {
+            if (!blackList.group?.length) return;
+            if (book.dataset.hitomiGroupBlacklistHandled) return;
+            book.dataset.hitomiGroupBlacklistHandled = '1';
+            enqueueGroupBlacklistFetch(galleryId, book);
+        }).catch(() => {});
     }
 
     async function loadFoldedBookIds() {
@@ -1529,6 +1600,7 @@
         const href = link.getAttribute('href') || '';
         const hrefPatterns = [
             [/^\/artist\//, 'author'],
+            [/^\/group\//, 'group'],
             [/^\/tag\//, 'tag'],
             [/^\/series\//, 'series'],
             [/^\/type\//, 'type'],
@@ -4847,6 +4919,7 @@
         focusedBook.classList.add(focusedBookClassName);
         scrollBookIntoViewIfNeeded(focusedBook);
         triggerPageCountFetchForFocusedBook(book);
+        triggerGroupBlacklistCheckForFocusedBook(book);
     }
 
     function getFocusedBook() {
