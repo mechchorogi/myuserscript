@@ -3983,17 +3983,17 @@
         return cell?.textContent;
     }
 
-    function getBookPageGroup(root, galleryInfo) {
+    function getBookPageGroupRomaji(root, galleryInfo) {
         // Prefer ID-verified galleryinfo; inspect the DOM only when the canonical metadata is missing.
         const infoGroups = getGalleryInfoNames(galleryInfo?.groups, 'group');
-        if (infoGroups.length) return infoGroups.map(group => resolveJapaneseName(group, 'group')).join(', ');
+        if (infoGroups.length) return infoGroups.join(', ');
 
         const tableRows = Array.from(root.querySelectorAll('table tr'));
         for (const row of tableRows) {
             const cells = Array.from(row.children);
             if (normalizeMetadataText(cells[0]?.textContent).toLowerCase() === 'group') {
                 const group = normalizeMetadataText(getCellDisplayText(cells[1]));
-                if (!isMissingMetadataValue(group)) return resolveJapaneseName(group, 'group');
+                if (!isMissingMetadataValue(group)) return group;
             }
         }
 
@@ -4001,21 +4001,33 @@
         const groupLabel = labels.find(label => normalizeMetadataText(label.textContent).toLowerCase() === 'group');
         if (groupLabel) {
             const group = normalizeMetadataText(getCellDisplayText(groupLabel.nextElementSibling));
-            if (!isMissingMetadataValue(group)) return resolveJapaneseName(group, 'group');
+            if (!isMissingMetadataValue(group)) return group;
         }
 
         return '';
     }
 
-    function getBookPageAuthors(root, galleryInfo) {
+    function getBookPageGroup(root, galleryInfo) {
+        const romaji = getBookPageGroupRomaji(root, galleryInfo);
+        if (!romaji) return '';
+
+        // Preserve per-group name-map resolution when verified metadata has multiple credits.
+        const infoGroups = getGalleryInfoNames(galleryInfo?.groups, 'group');
+        return infoGroups.length
+            ? infoGroups.map(group => resolveJapaneseName(group, 'group')).join(', ')
+            : resolveJapaneseName(romaji, 'group');
+    }
+
+    function getBookPageAuthorNamesRomaji(root, galleryInfo) {
         const infoAuthors = getGalleryInfoNames(galleryInfo?.artists, 'artist');
         const authorText = getMetadataListText(root, 'h2#artists');
         const authorNames = infoAuthors.length ? infoAuthors : (isMissingMetadataValue(authorText) ? [] : authorText.split(','));
+        const names = authorNames.map(name => normalizeMetadataText(name)).filter(Boolean);
+        return [...new Set(names)];
+    }
 
-        const names = authorNames
-            .map(name => normalizeMetadataText(name))
-            .filter(Boolean)
-            .map(name => resolveJapaneseName(name, 'author'));
+    function getBookPageAuthors(root, galleryInfo) {
+        const names = getBookPageAuthorNamesRomaji(root, galleryInfo).map(name => resolveJapaneseName(name, 'author'));
         return [...new Set(names)];
     }
 
@@ -4043,7 +4055,7 @@
         return '';
     }
 
-    function formatDownloadFileNameFromMetadata({ group, authors, title, series }) {
+    function formatDownloadFileNameFromMetadata({ group, authors, title, series, groupRomaji, authorsRomaji }) {
         const hasGroup = !isMissingMetadataValue(group);
         const normalizedGroup = normalizeMetadataText(group);
         const normalizedAuthors = authors.map(author => normalizeMetadataText(author)).filter(Boolean);
@@ -4061,9 +4073,17 @@
             authorPart = hasGroup ? 'various artists' : 'Various Artists';
         }
 
+        // Compare pre-name-map romaji, not the resolved display strings: group/author
+        // Japanese names live in separate name-map namespaces and can diverge even when
+        // the underlying romaji credit is the same person/circle.
+        const sameAsGroup = normalizedAuthors.length === 1
+            && groupRomaji
+            && authorsRomaji?.length === 1
+            && normalizeMetadataText(groupRomaji).toLowerCase() === normalizeMetadataText(authorsRomaji[0]).toLowerCase();
+
         let bracket = 'Unknown';
         if (hasGroup && authorPart) {
-            bracket = `${normalizedGroup} (${authorPart})`;
+            bracket = sameAsGroup ? normalizedGroup : `${normalizedGroup} (${authorPart})`;
         } else if (hasGroup) {
             bracket = normalizedGroup;
         } else if (authorPart) {
@@ -4081,7 +4101,9 @@
             group: getBookPageGroup(root, galleryInfo),
             authors: getBookPageAuthors(root, galleryInfo),
             series: getBookPageSeries(root, galleryInfo),
-            title: getBookPageTitle(root, galleryInfo, galleryId)
+            title: getBookPageTitle(root, galleryInfo, galleryId),
+            groupRomaji: getBookPageGroupRomaji(root, galleryInfo),
+            authorsRomaji: getBookPageAuthorNamesRomaji(root, galleryInfo)
         });
     }
 
