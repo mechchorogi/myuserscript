@@ -1874,10 +1874,14 @@
         // both: the Japanese name first, with the original romaji kept but shrunk.
         if (!root) return;
         root.querySelectorAll('a[href^="/artist/"]').forEach(link => {
+            // Preserve the canonical romaji across repeat calls: once the link is
+            // annotated its textContent becomes "japanese romaji", not the bare romaji.
+            const romajiText = link.dataset.hitomiNameMapOriginal || normalizeMetadataText(link.textContent);
+            const romaji = normalizeNameMapKey(romajiText);
+            insertFavoriteStar(link, 'author', romaji, romajiText);
+
             if (link.dataset.hitomiNameMapAnnotated) return;
 
-            const romajiText = normalizeMetadataText(link.textContent);
-            const romaji = normalizeNameMapKey(romajiText);
             const japanese = nameMap.author?.[romaji];
 
             link.dataset.hitomiNameMapAnnotated = '1';
@@ -5582,6 +5586,8 @@
             installFavoritesNavLink();
             installNameMapNavLink();
             await loadNameMap();
+            await loadFavorites();
+            installFavoriteStars();
             annotateAllArtistsPage(document.querySelector('div.content'));
             return;
         }
