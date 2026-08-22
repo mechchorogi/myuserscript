@@ -91,6 +91,7 @@
     const helpOverlayHiddenClassName = 'hitomi-tweak-help-overlay-hidden';
     const shakeBlockedClassName = 'hitomi-tweak-shake-blocked';
     const blocklistModeActiveClassName = 'hitomi-tweak-blocklist-mode-active';
+    const blocklistHoverTargetClassName = 'hitomi-tweak-blocklist-hover-target';
     const filterPanelId = 'hitomi-tweak-filter-panel';
     const filterPanelCollapsedKey = 'hitomi-tweak-filter-panel-collapsed';
     const filterBookMap = new WeakMap();
@@ -984,6 +985,32 @@
 
             body.${blocklistModeActiveClassName} {
                 background: #ffd9d9 !important;
+            }
+
+            .${blocklistHoverTargetClassName} {
+                position: relative;
+                box-sizing: border-box;
+            }
+
+            .${blocklistHoverTargetClassName}::before {
+                content: '';
+                position: absolute;
+                inset: -2px;
+                pointer-events: none;
+                background:
+                    linear-gradient(90deg, #ff0000 50%, transparent 50%) repeat-x,
+                    linear-gradient(90deg, #ff0000 50%, transparent 50%) repeat-x,
+                    linear-gradient(0deg, #ff0000 50%, transparent 50%) repeat-y,
+                    linear-gradient(0deg, #ff0000 50%, transparent 50%) repeat-y;
+                background-size: 8px 2px, 8px 2px, 2px 8px, 2px 8px;
+                background-position: 0 0, 0 100%, 0 0, 100% 0;
+                animation: hitomi-tweak-blocklist-hover-marching-ants 0.4s linear infinite;
+            }
+
+            @keyframes hitomi-tweak-blocklist-hover-marching-ants {
+                to {
+                    background-position: 8px 0, -8px 100%, 0 -8px, 100% 8px;
+                }
             }
 
             .hitomi-switch {
@@ -1924,6 +1951,23 @@
         refreshFilter(blackList);
     }
 
+    function blacklistHoverOverHandler(e) {
+        if (e.target.closest(`#${filterPanelId}`)) return;
+
+        const link = e.target.closest('a');
+        if (!link) return;
+
+        if (e.target.closest('#related-content')) return;
+
+        const key = getBlacklistKeyFromLink(link);
+        if (key) link.classList.add(blocklistHoverTargetClassName);
+    }
+
+    function blacklistHoverOutHandler(e) {
+        const link = e.target.closest('a');
+        if (link) link.classList.remove(blocklistHoverTargetClassName);
+    }
+
     function applyBlocklistFormDisabledState(panel, enabled) {
         for (const key of blacklistKeys) {
             const textarea = panel.querySelector(`#blacklist-input-${key}`);
@@ -2227,8 +2271,13 @@
             document.body.classList.toggle(blocklistModeActiveClassName, !active);
             if (!active) {
                 document.body.addEventListener('click', blacklistClickHandler, true);
+                document.body.addEventListener('mouseover', blacklistHoverOverHandler, true);
+                document.body.addEventListener('mouseout', blacklistHoverOutHandler, true);
             } else {
                 document.body.removeEventListener('click', blacklistClickHandler, true);
+                document.body.removeEventListener('mouseover', blacklistHoverOverHandler, true);
+                document.body.removeEventListener('mouseout', blacklistHoverOutHandler, true);
+                document.querySelectorAll(`.${blocklistHoverTargetClassName}`).forEach(el => el.classList.remove(blocklistHoverTargetClassName));
             }
         });
 
