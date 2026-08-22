@@ -1748,10 +1748,28 @@
             const input = button.previousElementSibling?.matches('.hitomi-name-map-inline-input')
                 ? button.previousElementSibling
                 : null;
-            const link = (input?.previousElementSibling || button.previousElementSibling);
-            if (link?.matches('a[href]')) {
-                link.textContent = japanese;
-                link.classList.add('hitomi-name-map-resolved');
+            const target = (input?.previousElementSibling || button.previousElementSibling);
+            if (target?.matches('a[href]')) {
+                if (isAllArtistsPage()) {
+                    const romajiText = target.dataset.hitomiNameMapOriginal || romaji;
+                    const romajiSpan = document.createElement('span');
+                    romajiSpan.textContent = romajiText;
+                    romajiSpan.style.fontSize = '0.6em';
+
+                    target.textContent = '';
+                    target.append(`${japanese} `, romajiSpan);
+                } else {
+                    target.textContent = japanese;
+                    target.classList.add('hitomi-name-map-resolved');
+                }
+            } else if (target?.matches('h3#artistname')) {
+                const romajiText = target.dataset.hitomiNameMapOriginal || romaji;
+                const romajiSpan = document.createElement('span');
+                romajiSpan.textContent = romajiText;
+                romajiSpan.style.fontSize = '0.6em';
+
+                target.textContent = '';
+                target.append(`${japanese} `, romajiSpan);
             }
             input?.remove();
             button.remove();
@@ -1886,7 +1904,18 @@
 
             link.dataset.hitomiNameMapAnnotated = '1';
             link.dataset.hitomiNameMapOriginal = romajiText;
-            if (!japanese) return;
+            if (!japanese) {
+                const editButton = document.createElement('button');
+                editButton.type = 'button';
+                editButton.className = 'hitomi-name-map-edit-button';
+                editButton.textContent = '✎';
+                editButton.title = 'Add Japanese name';
+                editButton.setAttribute('aria-label', `Add Japanese name for ${romajiText}`);
+                editButton.dataset.hitomiNameMapKind = 'author';
+                editButton.dataset.hitomiNameMapRomaji = romaji;
+                link.insertAdjacentElement('afterend', editButton);
+                return;
+            }
 
             const romajiSpan = document.createElement('span');
             romajiSpan.textContent = romajiText;
@@ -1912,7 +1941,18 @@
 
         heading.dataset.hitomiNameMapAnnotated = '1';
         heading.dataset.hitomiNameMapOriginal = romajiText;
-        if (!japanese) return;
+        if (!japanese) {
+            const editButton = document.createElement('button');
+            editButton.type = 'button';
+            editButton.className = 'hitomi-name-map-edit-button';
+            editButton.textContent = '✎';
+            editButton.title = 'Add Japanese name';
+            editButton.setAttribute('aria-label', `Add Japanese name for ${romajiText}`);
+            editButton.dataset.hitomiNameMapKind = kind;
+            editButton.dataset.hitomiNameMapRomaji = romaji;
+            heading.insertAdjacentElement('afterend', editButton);
+            return;
+        }
 
         // Match the all-artists page format so the canonical romaji remains visible.
         const romajiSpan = document.createElement('span');
@@ -5588,6 +5628,7 @@
             await loadNameMap();
             await loadFavorites();
             installFavoriteStars();
+            installInlineNameMapEditor();
             annotateAllArtistsPage(document.querySelector('div.content'));
             return;
         }
