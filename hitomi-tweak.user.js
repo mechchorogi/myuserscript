@@ -2634,6 +2634,9 @@
                     event.preventDefault();
                     openFavoriteInBackground(entry);
                 }
+            } else if (event.key === 'c') {
+                event.preventDefault();
+                closeCurrentTab();
             }
         }
 
@@ -3170,6 +3173,9 @@
                     input.focus();
                     input.select();
                 }
+            } else if (event.key === 'c') {
+                event.preventDefault();
+                closeCurrentTab();
             }
         }
 
@@ -3635,6 +3641,9 @@
                 focusRow(keyUpTargetIndex(selectedIndex, rows.length));
             } else if (event.key === 'v' && openSelectedRow()) {
                 event.preventDefault();
+            } else if (event.key === 'c') {
+                event.preventDefault();
+                closeCurrentTab();
             }
         }
 
@@ -5625,6 +5634,11 @@
             installDownloadNavLink();
             installFavoritesNavLink();
             installNameMapNavLink();
+            document.addEventListener('keydown', e => {
+                if (e.key !== 'c' || !hasPlainModifierState(e) || isEditableTarget(e.target)) return;
+                e.preventDefault();
+                closeCurrentTab();
+            });
             await loadNameMap();
             await loadFavorites();
             installFavoriteStars();
