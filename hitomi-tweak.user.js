@@ -274,6 +274,13 @@
         navList.appendChild(li);
     }
 
+    function openArtistsNavLinkInNewTab() {
+        const link = document.querySelector('.navbar nav ul a[href^="/allartists-"]');
+        if (!link) return;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+    }
+
     function blacklistStorageKey(key) {
         return `hitomi-tweak-blacklist-${key}`;
     }
@@ -5634,6 +5641,7 @@
             installDownloadNavLink();
             installFavoritesNavLink();
             installNameMapNavLink();
+            openArtistsNavLinkInNewTab();
             document.addEventListener('keydown', e => {
                 if (e.key !== 'c' || !hasPlainModifierState(e) || isEditableTarget(e.target)) return;
                 e.preventDefault();
@@ -5654,6 +5662,7 @@
         installDownloadNavLink();
         installFavoritesNavLink();
         installNameMapNavLink();
+        openArtistsNavLinkInNewTab();
 
         if (isReaderPage()) {
             installReaderProgress();
