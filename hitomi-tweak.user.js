@@ -1805,6 +1805,10 @@
 
             let canceled = false;
             input.addEventListener('keydown', keyEvent => {
+                // The site's own bookpage script listens for arrow keys (image
+                // preview paging) at the document level; without this, typing in
+                // this input loses native cursor movement to that listener.
+                keyEvent.stopPropagation();
                 if (keyEvent.isComposing) return;
                 if (keyEvent.key === 'Enter') {
                     keyEvent.preventDefault();
