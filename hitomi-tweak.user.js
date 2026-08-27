@@ -848,7 +848,7 @@
 
             #hitomi-page-progress-tooltip {
                 position: absolute;
-                bottom: calc(100% + 4px);
+                top: 50%;
                 padding: 2px 6px;
                 border-radius: 3px;
                 background: rgba(0, 0, 0, 0.8);
@@ -856,7 +856,18 @@
                 font-size: 11px;
                 pointer-events: none;
                 white-space: nowrap;
-                transform: translateX(-50%);
+                transform: translate(calc(-100% - 8px), -50%);
+            }
+
+            #hitomi-page-progress-tooltip::after {
+                content: '';
+                position: absolute;
+                top: 50%;
+                right: -6px;
+                transform: translateY(-50%);
+                border-style: solid;
+                border-width: 5px 0 5px 6px;
+                border-color: transparent transparent transparent rgba(0, 0, 0, 0.8);
             }
 
             .hitomi-folded h1.lillie {
@@ -5350,22 +5361,24 @@
         const progressDisplay = document.createElement('span');
         progressDisplay.id = 'hitomi-page-progress-text';
         progressDisplay.style.color = 'white';
-        progressDisplay.style.padding = '8px';
-        progressDisplay.style.alignSelf = 'center';
+        progressDisplay.style.padding = '0 8px';
+        progressDisplay.style.whiteSpace = 'nowrap';
 
         const progressContainer = document.createElement('div');
         progressContainer.id = 'hitomi-page-progress-container';
         progressContainer.style.display = 'flex';
-        progressContainer.style.flexDirection = 'column';
-        progressContainer.style.alignItems = 'flex-start';
+        progressContainer.style.flexDirection = 'row';
+        progressContainer.style.alignItems = 'center';
+        progressContainer.style.gap = '8px';
         progressContainer.style.minWidth = '240px';
+        progressContainer.style.height = '40px';
+        progressContainer.style.boxSizing = 'border-box';
 
         const progressBar = document.createElement('div');
         progressBar.id = 'hitomi-page-progress-bar';
-        progressBar.style.width = '100%';
-        progressBar.style.marginTop = '4px';
+        progressBar.style.flex = '1 1 auto';
         progressBar.style.boxSizing = 'border-box';
-        progressBar.style.padding = '8px 0';
+        progressBar.style.padding = '4px 0';
         progressBar.style.cursor = 'pointer';
         progressBar.style.position = 'relative';
 
