@@ -812,6 +812,24 @@
         row?.scrollIntoView({ block: 'nearest' });
     }
 
+    function getViewportScrollPadding() {
+        const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+        return Math.min(180, Math.max(96, viewportHeight * 0.16));
+    }
+
+    function scrollRowIntoViewWithPadding(row) {
+        if (!row) return;
+        const rect = row.getBoundingClientRect();
+        const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+        const padding = getViewportScrollPadding();
+
+        if (rect.top < padding) {
+            window.scrollBy({ top: rect.top - padding, behavior: 'auto' });
+        } else if (rect.bottom > viewportHeight - padding) {
+            window.scrollBy({ top: rect.bottom - viewportHeight + padding, behavior: 'auto' });
+        }
+    }
+
     function hasPlainModifierState(e) {
         return !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey;
     }
@@ -2447,6 +2465,24 @@
                 border-radius: 6px;
                 font: inherit;
             }
+            .hitomi-favorites-controls {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                margin-bottom: 16px;
+            }
+            .hitomi-favorites-controls .hitomi-favorites-search {
+                margin-bottom: 0;
+            }
+            .hitomi-favorites-new-only-label {
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+                font-size: 14px;
+                color: #1f2328;
+                cursor: pointer;
+                white-space: nowrap;
+            }
             .hitomi-favorites-table-wrap {
                 overflow-x: auto;
                 border: 1px solid #d0d7de;
@@ -2510,12 +2546,26 @@
                 color: #57606a;
                 font-size: 12px;
             }
+            .hitomi-favorites-sort-indicator {
+                margin-left: 4px;
+                font-size: 11px;
+            }
         `;
         document.head.appendChild(style);
 
+        const sortIndicatorClassName = 'hitomi-favorites-sort-indicator';
+        const columns = [
+            { key: 'kind', label: 'Kind' },
+            { key: 'name', label: 'Name' },
+            { key: 'status', label: 'Status' }
+        ];
+        const headerElems = new Map();
         const page = document.createElement('main');
         const title = document.createElement('h1');
+        const controls = document.createElement('div');
         const searchInput = document.createElement('input');
+        const newOnlyLabel = document.createElement('label');
+        const newOnlyCheckbox = document.createElement('input');
         const tableWrap = document.createElement('div');
         const table = document.createElement('table');
         const thead = document.createElement('thead');
@@ -2529,11 +2579,28 @@
         searchInput.className = 'hitomi-favorites-search';
         searchInput.placeholder = 'Search romaji or Japanese name';
         searchInput.setAttribute('aria-label', 'Search favorites');
+        controls.className = 'hitomi-favorites-controls';
+        newOnlyCheckbox.type = 'checkbox';
+        newOnlyCheckbox.checked = true;
+        newOnlyLabel.className = 'hitomi-favorites-new-only-label';
+        newOnlyLabel.append(newOnlyCheckbox, document.createTextNode(' NEWのみ表示'));
+        controls.append(searchInput, newOnlyLabel);
         tableWrap.className = 'hitomi-favorites-table-wrap';
         table.className = 'hitomi-favorites-table';
         emptyMessage.className = 'hitomi-favorites-empty';
 
-        for (const label of ['Kind', 'Name', 'Status', 'Link', 'Remove']) {
+        columns.forEach(column => {
+            const th = document.createElement('th');
+            const indicator = document.createElement('span');
+            th.textContent = column.label;
+            indicator.className = sortIndicatorClassName;
+            th.appendChild(indicator);
+            th.style.cursor = 'pointer';
+            th.addEventListener('click', () => setSort(column.key));
+            headerElems.set(column.key, th);
+            headerRow.appendChild(th);
+        });
+        for (const label of ['Link', 'Remove']) {
             const th = document.createElement('th');
             th.textContent = label;
             headerRow.appendChild(th);
@@ -2541,13 +2608,15 @@
         thead.appendChild(headerRow);
         table.append(thead, tbody);
         tableWrap.appendChild(table);
-        page.append(title, searchInput, tableWrap, emptyMessage);
+        page.append(title, controls, tableWrap, emptyMessage);
         document.body.appendChild(page);
 
         const latestGalleryResults = new Map();
         const visibleStatusCells = new Map();
         const selectedRowClassName = 'hitomi-favorites-selected-row';
         let selectedIndex = -1;
+        let sortState = { key: 'status', direction: 'asc' };
+        let showNewOnly = true;
 
         function getFavoriteEntryKey(entry) {
             return JSON.stringify([entry.kind, entry.romaji]);
@@ -2583,10 +2652,27 @@
             statusTd.appendChild(status);
         }
 
+        function getStatusSortRank(entry) {
+            const result = latestGalleryResults.get(getFavoriteEntryKey(entry));
+            if (!result || result.state === 'loading') return 4;
+            if (result.latestId === null) return 3;
+            if (result.lastSeenId === null) return 2;
+            if (result.latestId > result.lastSeenId) return 0;
+            return 1;
+        }
+
         function refreshVisibleStatus(entry) {
             const key = getFavoriteEntryKey(entry);
             const statusTd = visibleStatusCells.get(key);
             if (statusTd) renderStatus(statusTd, latestGalleryResults.get(key));
+        }
+
+        function refreshEntryDisplay(entry) {
+            if (showNewOnly) {
+                renderTable();
+            } else {
+                refreshVisibleStatus(entry);
+            }
         }
 
         function markFavoriteSeen(entry, entryKey) {
@@ -2598,7 +2684,7 @@
                 return true;
             }).then(() => {
                 result.lastSeenId = result.latestId;
-                refreshVisibleStatus(entry);
+                refreshEntryDisplay(entry);
             }).catch(error => console.error('Failed to update favorite watch state.', error));
         }
 
@@ -2609,11 +2695,23 @@
             markFavoriteSeen(entry, getFavoriteEntryKey(entry));
         }
 
+        function compareEntries(a, b) {
+            const direction = sortState.direction === 'asc' ? 1 : -1;
+            if (sortState.key === 'kind') {
+                return (a.kind.localeCompare(b.kind)
+                    || a.romaji.localeCompare(b.romaji, undefined, { numeric: true, sensitivity: 'base' })) * direction;
+            }
+            if (sortState.key === 'status') {
+                return (getStatusSortRank(a) - getStatusSortRank(b)) * direction;
+            }
+            const aName = nameMap[a.kind]?.[a.romaji] || a.romaji;
+            const bName = nameMap[b.kind]?.[b.romaji] || b.romaji;
+            return aName.localeCompare(bName, undefined, { numeric: true, sensitivity: 'base' }) * direction;
+        }
+
         function getFavoriteEntries() {
             return ['author', 'group', 'tag']
-                .flatMap(kind => Object.keys(favorites[kind] || {}).map(romaji => ({ kind, romaji })))
-                .sort((a, b) => a.kind.localeCompare(b.kind)
-                    || a.romaji.localeCompare(b.romaji, undefined, { numeric: true, sensitivity: 'base' }));
+                .flatMap(kind => Object.keys(favorites[kind] || {}).map(romaji => ({ kind, romaji })));
         }
 
         function getFilteredFavoriteEntries() {
@@ -2621,8 +2719,9 @@
             const query = searchInput.value.trim().toLowerCase();
             return allEntries.filter(entry => {
                 const japanese = nameMap[entry.kind]?.[entry.romaji] || '';
-                return !query || entry.romaji.toLowerCase().includes(query) || japanese.toLowerCase().includes(query);
-            });
+                const matchesQuery = !query || entry.romaji.toLowerCase().includes(query) || japanese.toLowerCase().includes(query);
+                return matchesQuery && (!showNewOnly || getStatusSortRank(entry) === 0);
+            }).sort(compareEntries);
         }
 
         function applySelectionHighlight() {
@@ -2636,7 +2735,7 @@
             selectedIndex = clampSelectedIndex(index, entries.length);
             if (selectedIndex === -1) return;
             applySelectionHighlight();
-            if (scrollIntoView) scrollRowIntoView(tbody.children[selectedIndex]);
+            if (scrollIntoView) scrollRowIntoViewWithPadding(tbody.children[selectedIndex]);
         }
 
         function handleKeydown(event) {
@@ -2659,6 +2758,29 @@
             } else if (event.key === 'c') {
                 event.preventDefault();
                 closeCurrentTab();
+            }
+        }
+
+        function renderHeaders() {
+            headerElems.forEach((heading, key) => {
+                const indicator = heading.querySelector(`.${sortIndicatorClassName}`);
+                if (!indicator) return;
+                indicator.textContent = sortState.key === key ? (sortState.direction === 'asc' ? '▲' : '▼') : '';
+            });
+        }
+
+        function setSort(key) {
+            const selectedEntry = selectedIndex >= 0 ? getFilteredFavoriteEntries()[selectedIndex] : null;
+            if (sortState.key === key) {
+                sortState.direction = sortState.direction === 'asc' ? 'desc' : 'asc';
+            } else {
+                sortState = { key, direction: 'asc' };
+            }
+            renderTable();
+            if (selectedEntry) {
+                const newIndex = getFilteredFavoriteEntries().findIndex(entry => entry.kind === selectedEntry.kind
+                    && entry.romaji === selectedEntry.romaji);
+                if (newIndex !== -1) focusRow(newIndex, { scrollIntoView: false });
             }
         }
 
@@ -2718,9 +2840,14 @@
             tableWrap.hidden = entries.length === 0;
             emptyMessage.hidden = entries.length !== 0;
             emptyMessage.textContent = allEntries.length === 0 ? 'No favorites yet.' : 'No matching favorites.';
+            renderHeaders();
         }
 
         searchInput.addEventListener('input', renderTable);
+        newOnlyCheckbox.addEventListener('change', () => {
+            showNewOnly = newOnlyCheckbox.checked;
+            renderTable();
+        });
         window.addEventListener('keydown', handleKeydown, true);
         const initialEntries = getFavoriteEntries();
         initialEntries.forEach(entry => {
@@ -2734,7 +2861,7 @@
                     latestId,
                     lastSeenId: getLastSeenGalleryId(entry.kind, entry.romaji)
                 });
-                refreshVisibleStatus(entry);
+                refreshEntryDisplay(entry);
             });
         });
     }
