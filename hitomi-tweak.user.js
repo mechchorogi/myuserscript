@@ -8,6 +8,7 @@
 // @icon         https://www.google.com/s2/favicons?domain=hitomi.la
 // @grant        GM.getValue
 // @grant        GM.setValue
+// @grant        GM.listValues
 // @grant        GM.openInTab
 // @grant        GM_registerMenuCommand
 // @grant        GM_unregisterMenuCommand
@@ -20,7 +21,7 @@
 
 // Features:
 // - Filter gallery books with a GM-stored blacklist.
-// - Import and export blacklist JSON backups.
+// - Import and export all user data as JSON backups.
 // - Fold gallery books and persist the folded state.
 // - Download books immediately and keep a unified history, with up to four list downloads at once.
 // - Show page progress in the reader.
@@ -797,6 +798,49 @@
             });
             input.click();
         });
+    }
+
+    async function exportUserData() {
+        const keys = (await GM.listValues()).filter(key => key.startsWith('hitomi-tweak-'));
+        const data = {};
+        for (const key of keys) {
+            data[key] = await GM.getValue(key);
+            if (key === downloadHistoryKey) {
+                // The standalone history page can update only localStorage; export the merged history.
+                data[key] = await loadDownloadHistory();
+            }
+        }
+        downloadJson({ version: 1, exportedAt: new Date().toISOString(), data }, 'hitomi-tweak-userdata-backup.json');
+    }
+
+    async function importUserData() {
+        // A full user-data import overwrites existing values, so require explicit confirmation.
+        if (!confirm('現在の全ユーザーデータを上書きします。よろしいですか？')) return;
+        const text = await pickJsonFile();
+        if (text == null) return;
+
+        let payload;
+        try {
+            payload = JSON.parse(text);
+        } catch (e) {
+            alert('Invalid file format');
+            return;
+        }
+        if (!payload || payload.version !== 1 || !payload.data || typeof payload.data !== 'object' || Array.isArray(payload.data)) {
+            alert('Invalid file format');
+            return;
+        }
+
+        for (const [key, value] of Object.entries(payload.data)) {
+            await GM.setValue(key, value);
+            if (key === downloadHistoryKey) {
+                // Replace both stores so stale local history cannot override the imported GM value.
+                localStorage.setItem(downloadHistoryKey, JSON.stringify(value));
+            }
+        }
+        alert('インポート完了。ページを再読み込みします。');
+        // Reload to rebuild cached UI state consistently from the imported values.
+        location.reload();
     }
 
     function clampSelectedIndex(index, length) {
@@ -2063,16 +2107,6 @@
         if (select) select.disabled = !enabled;
     }
 
-    function applyNameMapFormDisabledState(exportBtn, importBtn, editLink, enabled) {
-        if (exportBtn) exportBtn.disabled = !enabled;
-        if (importBtn) importBtn.disabled = !enabled;
-        if (editLink) {
-            editLink.setAttribute('aria-disabled', String(!enabled));
-            editLink.style.pointerEvents = enabled ? '' : 'none';
-            editLink.style.opacity = enabled ? '' : '0.5';
-        }
-    }
-
     async function createFilterUI() {
         const panel = document.createElement('div');
         const toggleButton = document.createElement('button');
@@ -2213,65 +2247,6 @@
             form.append(label, textarea);
         }
 
-        const exportBtn = document.createElement('button');
-        exportBtn.textContent = 'Export';
-
-        const importBtn = document.createElement('button');
-        importBtn.textContent = 'Import';
-
-        const nameMapExportBtn = document.createElement('button');
-        nameMapExportBtn.id = 'hitomi-tweak-name-map-export';
-        nameMapExportBtn.textContent = 'Export';
-
-        const nameMapImportBtn = document.createElement('button');
-        nameMapImportBtn.id = 'hitomi-tweak-name-map-import';
-        nameMapImportBtn.textContent = 'Import';
-
-        exportBtn.addEventListener('click', async () => {
-            const data = {};
-            for (const key of blacklistKeys) {
-                data[key] = await GM.getValue(blacklistStorageKey(key), '');
-            }
-
-            downloadJson(data, 'hitomi-tweak-blacklist-backup.json');
-        });
-
-        importBtn.addEventListener('click', async () => {
-            const text = await pickJsonFile();
-            if (text == null) return;
-            try {
-                const data = JSON.parse(text);
-                for (const key of blacklistKeys) {
-                    if (typeof data[key] === 'string') {
-                        await GM.setValue(blacklistStorageKey(key), data[key]);
-                        panel.querySelector(`#blacklist-input-${key}`).value = data[key];
-                    }
-                }
-
-                const blackList = await loadBlacklist();
-                refreshFilter(blackList);
-            } catch (e) {
-                alert('Invalid file format');
-            }
-        });
-
-        nameMapExportBtn.addEventListener('click', async () => {
-            const data = normalizeNameMap(await GM.getValue(nameMapKey, nameMap));
-            downloadJson(data, 'hitomi-tweak-name-map-backup.json');
-        });
-
-        nameMapImportBtn.addEventListener('click', async () => {
-            const text = await pickJsonFile();
-            if (text == null) return;
-            try {
-                const beforeCount = countNameMapEntries();
-                await saveNameMap(JSON.parse(text));
-                alert(`Name map imported: ${beforeCount} -> ${countNameMapEntries()} entries`);
-            } catch (e) {
-                alert('Invalid name map format');
-            }
-        });
-
         panel.appendChild(form);
 
         const buttonRow = document.createElement('div');
@@ -2293,28 +2268,9 @@
         });
         markModeRow.appendChild(filterMarkModeButton);
 
-        const backupRow = document.createElement('div');
-        Object.assign(backupRow.style, {
-            display: 'flex',
-            gap: '10px'
-        });
-        backupRow.append(exportBtn, importBtn);
-
-        const nameMapHeading = document.createElement('div');
-        const nameMapEditLink = document.createElement('a');
-
-        nameMapEditLink.id = 'hitomi-tweak-name-map-edit';
-        nameMapEditLink.href = nameMapPagePath;
-        nameMapEditLink.target = '_blank';
-        nameMapEditLink.rel = 'noopener noreferrer';
-        nameMapEditLink.textContent = 'Edit';
-        Object.assign(nameMapEditLink.style, {
-            fontWeight: 'normal'
-        });
-        nameMapEditLink.addEventListener('click', e => {
-            if (!isNameMapEnabled) e.preventDefault();
-        });
-        Object.assign(nameMapHeading.style, {
+        const userDataHeading = document.createElement('div');
+        userDataHeading.textContent = 'User Data';
+        Object.assign(userDataHeading.style, {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
@@ -2324,16 +2280,23 @@
             paddingTop: '12px',
             borderTop: '1px solid rgba(0, 0, 0, 0.3)'
         });
-        nameMapHeading.append('Name Map', nameMapEditLink);
 
-        const nameMapBackupRow = document.createElement('div');
-        Object.assign(nameMapBackupRow.style, {
+        const userDataExportBtn = document.createElement('button');
+        userDataExportBtn.textContent = 'Export';
+        userDataExportBtn.addEventListener('click', exportUserData);
+
+        const userDataImportBtn = document.createElement('button');
+        userDataImportBtn.textContent = 'Import';
+        userDataImportBtn.addEventListener('click', importUserData);
+
+        const userDataBackupRow = document.createElement('div');
+        Object.assign(userDataBackupRow.style, {
             display: 'flex',
             gap: '10px'
         });
-        nameMapBackupRow.append(nameMapExportBtn, nameMapImportBtn);
+        userDataBackupRow.append(userDataExportBtn, userDataImportBtn);
 
-        buttonRow.append(markModeRow, backupRow, nameMapHeading, nameMapBackupRow);
+        buttonRow.append(markModeRow, userDataHeading, userDataBackupRow);
         panel.appendChild(buttonRow);
 
         for (const key of blacklistKeys) {
@@ -2346,7 +2309,6 @@
             preferredLanguageSelect,
             await GM.getValue(preferredLanguageEnabledKey, true)
         );
-        applyNameMapFormDisabledState(nameMapExportBtn, nameMapImportBtn, nameMapEditLink, isNameMapEnabled);
 
         filterMarkModeButton.addEventListener('click', () => {
             const active = filterMarkModeButton.dataset.active === 'true';
@@ -5708,15 +5670,6 @@
     async function toggleNameMapEnabled() {
         isNameMapEnabled = !isNameMapEnabled;
         await GM.setValue(nameMapEnabledKey, isNameMapEnabled);
-        const panel = document.querySelector(`#${filterPanelId}`);
-        if (panel) {
-            applyNameMapFormDisabledState(
-                panel.querySelector('#hitomi-tweak-name-map-export'),
-                panel.querySelector('#hitomi-tweak-name-map-import'),
-                panel.querySelector('#hitomi-tweak-name-map-edit'),
-                isNameMapEnabled
-            );
-        }
         refreshNameMapMenuCommand();
     }
 
