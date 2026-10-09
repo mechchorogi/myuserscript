@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Insert AV/IV query link
-// @version      1.4
+// @version      1.5
 // @description  Insert AV/IV query link
 // @author       mechchorogi
 // @match        https://adult.contents.fc2.com/article/*/
