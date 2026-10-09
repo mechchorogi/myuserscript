@@ -15,8 +15,8 @@
 (function () {
     'use strict';
 
-    const transformForTktube = query => query.replace(/-/g, "--");
-    const makeAVUrl = query => `https://tktube.com/search/${transformForTktube(query)}/`;
+    // javdock only matches IDs with the hyphen kept (e.g. "ABC-123"), so pass the query as-is.
+    const makeAVUrl = query => `https://www.javdock.com/ja/search/${query}/`;
     const makeIVUrl = query => `https://watchjavidol.com/?s=${query}`;
     const makeHitomiUrl = query => `https://hitomi.la/search.html?${query}`;
 
